@@ -1,0 +1,4 @@
+[project]
+name = "meta_fusion"
+description = "Distributed Metadata and Vector Fusion Store"
+version = "1.0.0"
