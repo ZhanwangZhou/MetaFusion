@@ -1,5 +1,6 @@
 import time
 import threading
+from leader.storage.store import *
 from utils.config import *
 from utils.network import tcp_server
 from utils.network import tcp_client
@@ -12,25 +13,36 @@ class Leader:
         self.port = port
         self.signals = {'shutdown': False}
         self.followers = []
-        self.check_heartbeat_thread = threading.Thread(self._check_heartbeat)
+        self.check_heartbeat_thread = threading.Thread(target=self._check_heartbeat)
         self.udp_listen_thread = threading.Thread(
             target=udp_server, args=(host, port, self.signals, self._udp_listen)
         )
         self.tcp_listen_thread = threading.Thread(
             target=tcp_server, args=(host, port, self.signals, self._tcp_listen)
         )
+        self.check_heartbeat_thread.start()
         self.udp_listen_thread.start()
         self.tcp_listen_thread.start()
+        init_metadata_table()
+        LOGGER.info('Leader initialized')
         self.tcp_listen_thread.join()
         self.udp_listen_thread.join()
+        self.check_heartbeat_thread.join()
+
+    def list_member(self):
+        print('Leader: Host = %s, Port = %d', self.host, self.port)
+        for i, follower in enumerate(self.followers):
+            print('Follower: ID = %d, Host = %s, Port = %d, Status = %s',
+                  i, follower['host'], follower['port'], follower['status'])
 
     def _check_heartbeat(self):
         while not self.signals['shutdown']:
             for follower in self.followers:
-                if time.time() - follower['heartbeat'] > FOLLOWER_TIMEOUT:
+                if follower['status'] == 'alive' and\
+                        time.time() - follower['heartbeat'] > FOLLOWER_TIMEOUT:
                     follower['status'] = 'dead'
                     LOGGER.info('Set follower %d to dead', follower['silo_id'])
-        time.sleep(FOLLOWER_HEARTBEAT_INTERVAL)
+            time.sleep(FOLLOWER_HEARTBEAT_INTERVAL)
 
     def _udp_listen(self, message_dict):
         match message_dict['message_type']:
@@ -63,7 +75,9 @@ class Leader:
             self.followers.append(new_follower)
         message = {
             'message_type': 'register_ack',
-            'silo_id': silo_id
+            'silo_id': silo_id,
+            'leader_host': self.host,
+            'leader_port': self.port
         }
         try:
             tcp_client(host, port, message)

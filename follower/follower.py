@@ -41,8 +41,11 @@ class Follower:
     def _tcp_listen(self, message_dict):
         match message_dict['message_type']:
             case 'register_ack':
-                self._handle_register_ack()
+                self._handle_register_ack(message_dict)
 
     def _handle_register_ack(self, message_dict):
         self.silo_id = message_dict['silo_id']
+        self.leader_host = message_dict['leader_host']
+        self.leader_port = message_dict['leader_port']
+        LOGGER.info('Follower %d registered\n', self.silo_id)
         self.heartbeat_thread.start()
