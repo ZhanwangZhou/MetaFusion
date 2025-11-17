@@ -9,37 +9,37 @@ import dateparser
 import spacy
 
 
-# 全局 lazy load spaCy 模型，避免每次都重新加载
+# Global lazy-loaded spaCy model to avoid reloading every time
 _NLP = None
 
 
 def _get_nlp():
     global _NLP
     if _NLP is None:
-        # 需要你提前跑过: python -m spacy download en_core_web_sm
+        # You need to run beforehand: python -m spacy download en_core_web_sm
         _NLP = spacy.load("en_core_web_sm")
     return _NLP
 
 
 @dataclass
 class PromptMetadata:
-    """我们从用户 query 里提取出来的结构化信息."""
-    # 时间范围（如果只有一个时间点，就 start == end）
+    """Structured information extracted from the user's query."""
+    # Time range (if only a single point, start == end)
     start_ts: Optional[datetime] = None
     end_ts: Optional[datetime] = None
 
-    # 原文中识别到的地点短语（"Yosemite", "New York" 等）
+    # Location phrases recognized in the original text (e.g., "Yosemite", "New York")
     locations: List[str] = None
 
-    # 用来当 tag / keyword 的词（比如 "dog", "wedding"）
+    # Words used as tags/keywords (e.g., "dog", "wedding")
     tags: List[str] = None
 
-    # 原始 query 文本
+    # Original query text
     raw_prompt: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
-        # datetime 转成 iso 字符串，方便打印 / json
+        # convert datetimes to ISO strings for printing / JSON
         if self.start_ts:
             d["start_ts"] = self.start_ts.isoformat()
         if self.end_ts:
@@ -49,16 +49,16 @@ class PromptMetadata:
 
 class PromptMetadataExtractor:
     """
-    从用户自然语言 prompt 中提取出:
-    - 时间范围 (start_ts, end_ts)
-    - 地点短语 (locations)
-    - 关键词 tags (可以喂给 metadata 表里的 tags 字段)
+    Extract from a user's natural language prompt:
+    - time range (start_ts, end_ts)
+    - location phrases (locations)
+    - keyword tags (can be used for the metadata table's tags field)
     """
 
     def __init__(self):
         self.nlp = _get_nlp()
 
-    # -------- 对外唯一入口 --------
+    # -------- Public entry point --------
     def extract(self, prompt: str) -> PromptMetadata:
         doc = self.nlp(prompt)
 
@@ -74,7 +74,7 @@ class PromptMetadataExtractor:
             raw_prompt=prompt,
         )
 
-    # -------- 内部：地点提取 --------
+    # -------- Internal: location extraction --------
     def _extract_locations(self, doc) -> List[str]:
         locs = []
         for ent in doc.ents:
@@ -84,13 +84,13 @@ class PromptMetadataExtractor:
                     locs.append(text)
         return locs
 
-    # -------- 内部：时间范围提取 --------
+    # -------- Internal: time range extraction --------
     def _extract_time_range(self, doc, prompt: str) -> Tuple[Optional[datetime], Optional[datetime]]:
         """
-        简单策略:
-        - 找到第一个 DATE 类型的实体，用 dateparser 解析
-        - 如果看起来像“某年某月”（e.g., June 2025），我们把范围扩展成整个月
-        - 如果只解析出一个时间点，就 start == end
+        Simple strategy:
+        - Find the first DATE entity and parse it with dateparser
+        - If it looks like a 'year-month' (e.g., June 2025), expand to the whole month
+        - If only a single point is parsed, set start == end
         """
         date_text = None
         for ent in doc.ents:
@@ -99,7 +99,7 @@ class PromptMetadataExtractor:
                 break
 
         if not date_text:
-            # 尝试直接对整个 prompt 用 dateparser 再赌一把
+            # Try parsing the entire prompt with dateparser as a fallback
             dt = dateparser.parse(prompt)
             return dt, dt
 
@@ -107,16 +107,16 @@ class PromptMetadataExtractor:
         if not dt:
             return None, None
 
-        # 非严格：判定是不是“某年某月”
+    # Non-strict check: determine if the text looks like 'month name + year'
         lower = date_text.lower()
         months = [
             "january", "february", "march", "april", "may", "june",
             "july", "august", "september", "october", "november", "december"
         ]
         if any(m in lower for m in months) and any(c.isdigit() for c in lower):
-            # 构造这个月的起始和结束 (简化：假设都是 30 天)
+            # Construct the start and end of that month (simplified)
             start = dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            # 简单粗暴的 month+1 再减一点
+            # Naively add one month to form the end
             if dt.month == 12:
                 end = dt.replace(year=dt.year + 1, month=1, day=1,
                                  hour=0, minute=0, second=0, microsecond=0)
@@ -125,16 +125,16 @@ class PromptMetadataExtractor:
                                  hour=0, minute=0, second=0, microsecond=0)
             return start, end
 
-        # 否则就当单点时间
+        # Otherwise treat as a single-point date
         dt = dt.replace(hour=0, minute=0, second=0, microsecond=0)
         return dt, dt
 
-    # -------- 内部：tag 提取 --------
+    # -------- Internal: tag extraction --------
     def _extract_tags(self, doc, locations: List[str]) -> List[str]:
         """
-        非常简单的 heuristic：
-        - 用名词 (NOUN, PROPN) + 形容词 (ADJ) 做 tag
-        - 排除已经识别为地点的词
+        Very simple heuristic:
+        - Use nouns (NOUN, PROPN) and adjectives (ADJ) as tags
+        - Exclude words already recognized as locations
         """
         loc_set = set(l.lower() for l in locations)
         tags = []
