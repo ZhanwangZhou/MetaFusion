@@ -7,14 +7,14 @@ from typing import Optional, Tuple
 from geopy.geocoders import Nominatim
 
 
-# 全局一个 geolocator，避免每次都新建
+# A global geolocator to avoid creating one each time
 _geolocator: Optional[Nominatim] = None
 
 
 def _get_geolocator() -> Nominatim:
     global _geolocator
     if _geolocator is None:
-        # user_agent 随便写个字符串，不要为空
+        # user_agent should be any non-empty string
         _geolocator = Nominatim(user_agent="metafusion-geocoder")
     return _geolocator
 
@@ -22,10 +22,10 @@ def _get_geolocator() -> Nominatim:
 @lru_cache(maxsize=256)
 def geocode_location(name: str) -> Tuple[Optional[float], Optional[float]]:
     """
-    把地名（比如 "Yosemite"）转换成 (lat, lon)。
+        Convert a place name (e.g., "Yosemite") to (lat, lon).
 
-    返回:
-      (lat, lon) or (None, None) 如果没查到。
+        Returns:
+            (lat, lon) or (None, None) if not found.
     """
     if not name:
         return None, None
@@ -40,14 +40,15 @@ def geocode_location(name: str) -> Tuple[Optional[float], Optional[float]]:
 
 def geocode_bbox(name: str, radius_km: float = 50.0) -> Optional[Tuple[float, float, float, float]]:
     """
-    把地名转换成一个近似的经纬度 bounding box，方便拿去做 SQL 里的 lat/lon 范围过滤。
+        Convert a place name into an approximate latitude/longitude bounding box,
+        suitable for SQL lat/lon range filtering.
 
-    简化假设:
-      - 1 度纬度 ≈ 111km
-      - 经度也近似用一样的换算（在中纬度地区误差可以接受）
+        Simplifying assumptions:
+            - 1 degree latitude ≈ 111km
+            - longitude uses the same conversion (acceptable error at mid-latitudes)
 
-    返回:
-      (min_lat, max_lat, min_lon, max_lon) 或 None
+        Returns:
+            (min_lat, max_lat, min_lon, max_lon) or None
     """
     lat, lon = geocode_location(name)
     if lat is None or lon is None:
