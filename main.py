@@ -29,6 +29,11 @@ def leader(
             match cmd[0]:
                 case 'ls':
                     leader_node.list_member()
+                case 'upload':
+                    if len(cmd) != 2:
+                        print('Please specify command as:\nupload <image_path>')
+                    else:
+                        leader_node.upload(cmd[1])
         except (KeyboardInterrupt, EOFError):
             print("\nBye.")
             break

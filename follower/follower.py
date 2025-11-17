@@ -1,8 +1,10 @@
 import threading
 import time
+import base64
 from follower.storage.photo_to_vector import ImageEmbeddingModel
 from follower.storage.vertex_index import FollowerFaissIndex
 from utils.config import *
+from utils.image_utils import *
 from utils.network import tcp_server
 from utils.network import tcp_client
 from utils.network import udp_client
@@ -16,6 +18,7 @@ class Follower:
         self.leader_host = None
         self.leader_port = None
         self.signals = {'shutdown': False}
+        self.base_dir = 'state/follower/'  # TODO: update this with directory from cli
 
         self.model = None
         self.faiss_index = None
@@ -49,6 +52,8 @@ class Follower:
         match message_dict['message_type']:
             case 'register_ack':
                 self._handle_register_ack(message_dict)
+            case 'upload':
+                self._handle_upload(message_dict)
 
     def _handle_register_ack(self, message_dict):
         self.model = ImageEmbeddingModel(message_dict['model_name'],
@@ -62,3 +67,11 @@ class Follower:
         self.leader_port = message_dict['leader_port']
         LOGGER.info('Follower %d registered\n', self.silo_id)
         self.heartbeat_thread.start()
+
+    def _handle_upload(self, message_dict):
+        photo_id = message_dict['photo_id']
+        photo_format = message_dict['photo_format']
+        image_b64 = message_dict['image_b64']
+        image_bytes = base64.b64decode(image_b64)
+        os.makedirs(f'{self.base_dir}/photos/', exist_ok=True)
+        save_image_bytes(image_bytes, f'{self.base_dir}/photos/{photo_id}.{photo_format}')
