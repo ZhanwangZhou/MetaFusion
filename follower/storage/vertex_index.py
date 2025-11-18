@@ -53,9 +53,31 @@ class FollowerFaissIndex:
     def add(self, vector: np.ndarray):
         """
         Add vector to FAISS index and return assigned vector_id.
+
+        The caller is responsible for keeping any mapping from vector_id
+        to higher-level identifiers such as photo_id.
         """
         vector = vector.reshape(1, -1).astype("float32")
         vector_id = self.next_id
         self.index.add(vector)
         self.next_id += 1
         return vector_id
+
+    def search(self, query: np.ndarray, top_k: int = 10) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Search the index for the nearest neighbors of a query vector.
+
+        Args:
+            query: np.ndarray of shape (D,) or (1, D), dtype float32.
+            top_k: Number of nearest neighbors to retrieve.
+
+        Returns:
+            distances: np.ndarray of shape (top_k,), similarity/distance scores.
+            indices:   np.ndarray of shape (top_k,), corresponding vector IDs.
+        """
+        if query.ndim == 1:
+            query = query.reshape(1, -1)
+        query = query.astype("float32")
+        distances, indices = self.index.search(query, top_k)
+        # FAISS returns shape (1, top_k) for a single query.
+        return distances[0], indices[0]

@@ -1,26 +1,30 @@
 from typing import Optional
-import torch
+
 import clip
 import numpy as np
+import torch
 from PIL import Image
 
 
 class ImageEmbeddingModel:
     """
-    Wrapper for image encoder
+    Wrapper around CLIP for both image and text encoding.
     """
 
     def __init__(
-            self,
-            model_name: str = 'ViT-B/32',
-            device: Optional[str] = None,
-            normalize: bool = True):
+        self,
+        model_name: str = "ViT-B/32",
+        device: Optional[str] = None,
+        normalize: bool = True,
+    ):
         self.model_name = model_name
-        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.normalize = normalize
         self.model, self.preprocess = self._load_model()
         self.model.eval()
 
+        # Probe embedding dimension once so that downstream components
+        # (like FAISS index) can be initialized correctly.
         with torch.no_grad():
             dummy = torch.zeros(1, 3, 224, 224, device=self.device)
             emb = self.model.encode_image(dummy)
@@ -41,6 +45,26 @@ class ImageEmbeddingModel:
             image_tensor = self.preprocess(image).unsqueeze(0).to(self.device)
         with torch.no_grad():
             embedding = self.model.encode_image(image_tensor)
+        if self.normalize:
+            embedding = embedding / embedding.norm(dim=-1, keepdim=True)
+        embedding = embedding.squeeze(0).cpu().numpy().astype("float32")
+        return embedding
+
+    def encode_text(self, text: str) -> np.ndarray:
+        """
+        Encode a natural language text query into a single embedding vector.
+
+        The returned vector lives in the same embedding space as image
+        embeddings produced by `encode`, so it can be directly compared
+        with stored image vectors for text-to-image search.
+
+        Returns:
+            np.ndarray of shape (D,), dtype float32
+        """
+        # CLIP expects a batch of tokenized texts.
+        tokens = clip.tokenize([text]).to(self.device)
+        with torch.no_grad():
+            embedding = self.model.encode_text(tokens)
         if self.normalize:
             embedding = embedding / embedding.norm(dim=-1, keepdim=True)
         embedding = embedding.squeeze(0).cpu().numpy().astype("float32")
