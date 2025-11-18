@@ -18,7 +18,8 @@ class Follower:
         self.leader_host = None
         self.leader_port = None
         self.signals = {'shutdown': False}
-        self.base_dir = 'state/follower/'  # TODO: update this with directory from cli
+        self.base_dir = None
+        self.index_path = None
 
         self.model = None
         self.faiss_index = None
@@ -58,15 +59,18 @@ class Follower:
                 self._handle_upload(message_dict)
 
     def _handle_register_ack(self, message_dict):
-        self.model = ImageEmbeddingModel(message_dict['model_name'],
-                                         message_dict['device'],
-                                         message_dict['normalize'])
-        self.faiss_index = FollowerFaissIndex(message_dict['index_path'],
-                                              self.model.embedding_dim)
-        self.faiss_index.save()
         self.silo_id = message_dict['silo_id']
         self.leader_host = message_dict['leader_host']
         self.leader_port = message_dict['leader_port']
+        self.base_dir = os.path.join(message_dict['base_dir'],
+                                     f'follower{self.silo_id}')
+        self.index_path = os.path.join(self.base_dir, 'faiss.index')
+        self.model = ImageEmbeddingModel(message_dict['model_name'],
+                                         message_dict['device'],
+                                         message_dict['normalize'])
+        self.faiss_index = FollowerFaissIndex(self.index_path,
+                                              self.model.embedding_dim)
+        self.faiss_index.save()
         LOGGER.info('Follower %d registered\n', self.silo_id)
         self.heartbeat_thread.start()
 

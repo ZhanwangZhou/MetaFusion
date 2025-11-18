@@ -12,8 +12,8 @@ app = typer.Typer(help='MetaFusion distributed photo system CLI')
 def leader(
         host: str = typer.Option('localhost', help='Leader IP address'),
         port: int = typer.Option(8000, help='Leader port'),
-        index_path: str = typer.Option('state/follower/faiss.index',
-                                       help='Follower vector index path'),
+        base_dir: str = typer.Option('state/',
+                                       help='Follower vector index base directory'),
         model_name: str = typer.Option('ViT-B/32',
                                        help='Follower image embedding model name'),
         device: str = typer.Option('cpu',
@@ -22,7 +22,7 @@ def leader(
                                        help='Follower image embedding normalization')
 ):
     """Start the leader node."""
-    leader_node = Leader(host, port, index_path, model_name, device, normalize)
+    leader_node = Leader(host, port, base_dir, model_name, device, normalize)
 
     # If the Leader doesn't include an extractor, you can create one here in main:
     extractor = PromptMetadataExtractor()
