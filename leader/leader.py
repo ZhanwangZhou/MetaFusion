@@ -1,8 +1,11 @@
+import os
 import time
 import threading
+import base64
 from utils.prompt_metadata import PromptMetadataExtractor
 from leader.storage.store import *
 from utils.config import *
+from utils.image_utils import *
 from utils.network import tcp_server
 from utils.network import tcp_client
 from utils.network import udp_server
@@ -33,7 +36,7 @@ class Leader:
         self.check_heartbeat_thread.start()
         self.udp_listen_thread.start()
         self.tcp_listen_thread.start()
-        init_metadata_table()
+        self.conn = init_metadata_table()
         LOGGER.info('Leader initialized')
         # self.tcp_listen_thread.join()
         # self.udp_listen_thread.join()
@@ -44,6 +47,32 @@ class Leader:
         for i, follower in enumerate(self.followers):
             print('Follower: ID = %d, Host = %s, Port = %d, Status = %s'
                   % (i, follower['host'], follower['port'], follower['status']))
+
+    def upload(self, image_path):
+        if len(self.followers) == 0:
+            print('No follower nodes are assigned to the leader')
+            return
+        try:
+            image_bytes = read_image_bytes(image_path)
+        except Exception as e:
+            print(f'Failed to read image from {image_path}: {e}')
+            return
+        image_hash = hash_image_bytes(image_bytes)
+        photo_name = os.path.basename(image_path)
+        photo_id = image_hash  # can be updated later with upload_time/user_id
+        digest = hashlib.sha256(photo_id.encode("utf-8")).hexdigest()
+        index = int(digest, 16) % len(self.followers)
+        image_b64 = base64.b64encode(image_bytes).decode("ascii")
+        message = {
+            'message_type': 'upload',
+            'photo_id': photo_id,
+            'photo_name': photo_name,
+            'photo_format': get_format_from_bytes(image_bytes),
+            'image_b64': image_b64
+        }
+        tcp_client(self.followers[index]['host'],
+                   self.followers[index]['port'],
+                   message)
 
     def _check_heartbeat(self):
         while not self.signals['shutdown']:
@@ -63,6 +92,8 @@ class Leader:
         match message_dict['message_type']:
             case 'register':
                 self._handle_register(message_dict)
+            case 'upload_reply':
+                self._handle_upload_reply(message_dict)
 
     def _handle_register(self, message_dict):
         host = message_dict['host']
@@ -99,3 +130,9 @@ class Leader:
                         % (silo_id, host, port))
         except ConnectionRefusedError:
             self.followers[silo_id]['status'] = 'dead'
+
+    def _handle_upload_reply(self, message_dict):
+        silo_id = message_dict['silo_id']
+        metadata = message_dict['metadata']
+        insert_new_photo(self.conn, silo_id, metadata)
+        LOGGER.info(f'Inserted photo {metadata["photo_name"]} into metadata database')
