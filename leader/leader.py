@@ -74,6 +74,11 @@ class Leader:
                    self.followers[index]['port'],
                    message)
 
+    def clear(self):
+        # TODO: Clear the follower local store
+        clear_all_photos(self.conn)
+        LOGGER.info('Cleared photos in metadata database')
+
     def _check_heartbeat(self):
         while not self.signals['shutdown']:
             for follower in self.followers:
