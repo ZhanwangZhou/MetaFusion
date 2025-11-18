@@ -12,14 +12,14 @@ from utils.network import udp_server
 
 
 class Leader:
-    def __init__(self, host, port, index_path, model_name, device, normalize):
+    def __init__(self, host, port, base_dir, model_name, device, normalize):
         self.host = host
         self.port = port
         self.signals = {'shutdown': False}
         self.followers = []
 
         # Unified follower index/model parameters
-        self.index_path = index_path
+        self.base_dir = base_dir
         self.model_name = model_name
         self.device = device
         self.normalize = normalize
@@ -124,7 +124,7 @@ class Leader:
             'silo_id': silo_id,
             'leader_host': self.host,
             'leader_port': self.port,
-            'index_path': self.index_path,
+            'base_dir': self.base_dir,
             'model_name': self.model_name,
             'device': self.device,
             'normalize': self.normalize
