@@ -44,10 +44,9 @@ def leader(
                     # assume leader_node has list_member() to show the follower list
                     leader_node.list_member()
                 case 'upload':
-                    if len(cmd) != 2:
-                        print('Please specify command as:\nupload <image_path>')
-                    else:
-                        leader_node.upload(cmd[1])
+                    leader_node.upload(arg)
+                case 'clear':
+                    leader_node.clear()
                 case 'search':
                     if not arg:
                         print("Usage: search <natural language prompt>")

@@ -63,8 +63,13 @@ def insert_new_photo(conn, silo_id, metadata, table='photos_meta'):
     )
     cur.close()
 
-    
-    conn.close()
+
+def clear_all_photos(conn, table='photos_meta'):
+    cur = conn.cursor()
+    cur.execute(f'DELETE FROM {table}')
+    cur.close()
+
+
 def prefilter_candidate_silos(
     start_ts=None,
     end_ts=None,
