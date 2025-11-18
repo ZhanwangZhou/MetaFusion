@@ -1,0 +1,154 @@
+# utils/prompt_metadata.py
+from __future__ import annotations
+
+from dataclasses import dataclass, asdict
+from datetime import datetime
+from typing import List, Optional, Dict, Any, Tuple
+
+import dateparser
+import spacy
+
+
+# Global lazy-loaded spaCy model to avoid reloading every time
+_NLP = None
+
+
+def _get_nlp():
+    global _NLP
+    if _NLP is None:
+        # You need to run beforehand: python -m spacy download en_core_web_sm
+        _NLP = spacy.load("en_core_web_sm")
+    return _NLP
+
+
+@dataclass
+class PromptMetadata:
+    """Structured information extracted from the user's query."""
+    # Time range (if only a single point, start == end)
+    start_ts: Optional[datetime] = None
+    end_ts: Optional[datetime] = None
+
+    # Location phrases recognized in the original text (e.g., "Yosemite", "New York")
+    locations: List[str] = None
+
+    # Words used as tags/keywords (e.g., "dog", "wedding")
+    tags: List[str] = None
+
+    # Original query text
+    raw_prompt: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        # convert datetimes to ISO strings for printing / JSON
+        if self.start_ts:
+            d["start_ts"] = self.start_ts.isoformat()
+        if self.end_ts:
+            d["end_ts"] = self.end_ts.isoformat()
+        return d
+
+
+class PromptMetadataExtractor:
+    """
+    Extract from a user's natural language prompt:
+    - time range (start_ts, end_ts)
+    - location phrases (locations)
+    - keyword tags (can be used for the metadata table's tags field)
+    """
+
+    def __init__(self):
+        self.nlp = _get_nlp()
+
+    # -------- Public entry point --------
+    def extract(self, prompt: str) -> PromptMetadata:
+        doc = self.nlp(prompt)
+
+        locations = self._extract_locations(doc)
+        start_ts, end_ts = self._extract_time_range(doc, prompt)
+        tags = self._extract_tags(doc, locations)
+
+        return PromptMetadata(
+            start_ts=start_ts,
+            end_ts=end_ts,
+            locations=locations,
+            tags=tags,
+            raw_prompt=prompt,
+        )
+
+    # -------- Internal: location extraction --------
+    def _extract_locations(self, doc) -> List[str]:
+        locs = []
+        for ent in doc.ents:
+            if ent.label_ in ("GPE", "LOC", "FAC"):
+                text = ent.text.strip()
+                if text and text not in locs:
+                    locs.append(text)
+        return locs
+
+    # -------- Internal: time range extraction --------
+    def _extract_time_range(self, doc, prompt: str) -> Tuple[Optional[datetime], Optional[datetime]]:
+        """
+        Simple strategy:
+        - Find the first DATE entity and parse it with dateparser
+        - If it looks like a 'year-month' (e.g., June 2025), expand to the whole month
+        - If only a single point is parsed, set start == end
+        """
+        date_text = None
+        for ent in doc.ents:
+            if ent.label_ == "DATE":
+                date_text = ent.text
+                break
+
+        if not date_text:
+            # Try parsing the entire prompt with dateparser as a fallback
+            dt = dateparser.parse(prompt)
+            return dt, dt
+
+        dt = dateparser.parse(date_text)
+        if not dt:
+            return None, None
+
+    # Non-strict check: determine if the text looks like 'month name + year'
+        lower = date_text.lower()
+        months = [
+            "january", "february", "march", "april", "may", "june",
+            "july", "august", "september", "october", "november", "december"
+        ]
+        if any(m in lower for m in months) and any(c.isdigit() for c in lower):
+            # Construct the start and end of that month (simplified)
+            start = dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            # Naively add one month to form the end
+            if dt.month == 12:
+                end = dt.replace(year=dt.year + 1, month=1, day=1,
+                                 hour=0, minute=0, second=0, microsecond=0)
+            else:
+                end = dt.replace(month=dt.month + 1, day=1,
+                                 hour=0, minute=0, second=0, microsecond=0)
+            return start, end
+
+        # Otherwise treat as a single-point date
+        dt = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        return dt, dt
+
+    # -------- Internal: tag extraction --------
+    def _extract_tags(self, doc, locations: List[str]) -> List[str]:
+        """
+        Very simple heuristic:
+        - Use nouns (NOUN, PROPN) and adjectives (ADJ) as tags
+        - Exclude words already recognized as locations
+        """
+        loc_set = set(l.lower() for l in locations)
+        tags = []
+
+        for token in doc:
+            if token.is_stop or token.is_punct or not token.text.strip():
+                continue
+            if token.pos_ not in ("NOUN", "PROPN", "ADJ"):
+                continue
+
+            text = token.lemma_.lower()
+            if text in loc_set:
+                continue
+            if text not in tags:
+                tags.append(text)
+
+        return tags
