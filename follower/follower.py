@@ -70,8 +70,25 @@ class Follower:
 
     def _handle_upload(self, message_dict):
         photo_id = message_dict['photo_id']
+        photo_name = message_dict['photo_name']
         photo_format = message_dict['photo_format']
         image_b64 = message_dict['image_b64']
         image_bytes = base64.b64decode(image_b64)
-        os.makedirs(f'{self.base_dir}/photos/', exist_ok=True)
-        save_image_bytes(image_bytes, f'{self.base_dir}/photos/{photo_id}.{photo_format}')
+        photos_dir = os.path.join(self.base_dir, 'photos')
+        os.makedirs(photos_dir, exist_ok=True)
+        saved_image_path = os.path.join(photos_dir, f'{photo_id}.{photo_format.lower()}')
+        save_image_bytes(image_bytes, saved_image_path)
+        LOGGER.info(f'Saved uploaded image {photo_name} to {saved_image_path}')
+        vector = self.model.encode(saved_image_path)
+        self.faiss_index.add(vector)
+        LOGGER.info(f'Added uploaded image {photo_name} to local vector index')
+        metadata = extract_photo_metadata(saved_image_path)
+        metadata['photo_id'] = photo_id
+        metadata['photo_name'] = photo_name
+        metadata['photo_format'] = photo_format
+        message = {
+            'message_type': 'upload_reply',
+            'silo_id': self.silo_id,
+            'metadata': metadata
+        }
+        tcp_client(self.leader_host, self.leader_port, message)

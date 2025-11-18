@@ -1,5 +1,6 @@
 # leader/storage/store.py  (or leader/storage/db.py)
 import psycopg2
+from datetime import datetime
 from psycopg2.extras import register_default_jsonb
 from utils.config import *
 
@@ -10,6 +11,7 @@ def init_metadata_table(
 ):
     """
     Initialize the global metadata table in PostgreSQL.
+    TODO: adapt more metadata type. E.g. photo original name, camera model
     """
     register_default_jsonb(loads=None)
     conn = psycopg2.connect(
@@ -37,4 +39,26 @@ def init_metadata_table(
     cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_ts ON {table}(ts);")
 
     cur.close()
-    conn.close()
+    return conn
+
+
+def insert_new_photo(conn, silo_id, metadata, table='photos_meta'):
+    cur = conn.cursor()
+    timestamp = metadata.get('timestamp')
+    timestamp = datetime.strptime(timestamp, "%Y:%m:%d %H:%M:%S")
+    cur.execute(
+        f"""
+        INSERT INTO {table} (photo_id, silo_id, ts, lat, lon, tags, extra)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            metadata.get('photo_id'),
+            silo_id,
+            timestamp,
+            metadata.get('latitude'),
+            metadata.get('longitude'),
+            None,
+            None,
+        )
+    )
+    cur.close()
