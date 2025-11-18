@@ -99,6 +99,14 @@ def leader(
                     )
                     print(f"Found {len(candidates)} candidate photos, sample:", candidates[:5])
 
+                    # 3) Ask candidate followers to run vector search with the same prompt
+                    if not cand_silos:
+                        print("No candidate silos from metadata; skip vector search.")
+                    else:
+                        silo_ids = [s for (s, _) in cand_silos]
+                        # For now, keep it simple: request top_k results per follower.
+                        leader_node.search_text(prompt, candidate_silo_ids=silo_ids, top_k=5)
+
                 case 'exit' | 'quit':
                     print("Bye.")
                     break

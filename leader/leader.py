@@ -99,6 +99,8 @@ class Leader:
                 self._handle_register(message_dict)
             case 'upload_reply':
                 self._handle_upload_reply(message_dict)
+            case 'search_text_result':
+                self._handle_search_text_result(message_dict)
 
     def _handle_register(self, message_dict):
         host = message_dict['host']
@@ -141,3 +143,99 @@ class Leader:
         metadata = message_dict['metadata']
         insert_new_photo(self.conn, silo_id, metadata)
         LOGGER.info(f'Inserted photo {metadata["photo_name"]} into metadata database')
+
+    def _handle_search_text_result(self, message_dict):
+        """
+        Handle text-to-image search results coming back from a follower.
+
+        Expected message_dict format (from follower._handle_search_text):
+            {
+                "message_type": "search_text_result",
+                "silo_id": int,
+                "request_id": str or None,
+                "results": [
+                    {"vector_id": int, "score": float},
+                    ...
+                ]
+            }
+        """
+        silo_id = message_dict.get('silo_id')
+        request_id = message_dict.get('request_id')
+        results = message_dict.get('results', [])
+
+        print(f"[search_text_result] from follower {silo_id}, request_id={request_id}")
+        if not results:
+            print("  (no results)")
+            return
+
+        for r in results:
+            vid = r.get('vector_id')
+            score = r.get('score')
+            print(f"  vector_id={vid}, score={score}")
+
+    def search_text(self, prompt: str, candidate_silo_ids=None, top_k: int = 5):
+        """
+        Send a text-to-image search request to one or more followers.
+
+        Args:
+            prompt: natural language query string.
+            candidate_silo_ids: list of silo_id values (typically strings from DB).
+                                If None or empty, fall back to all alive followers.
+            top_k: how many nearest neighbors to request from each follower.
+        """
+        # 1) Decide which follower silo_ids to hit.
+        target_silos = set()
+
+        if candidate_silo_ids:
+            for s in candidate_silo_ids:
+                try:
+                    sid = int(s)
+                except (TypeError, ValueError):
+                    continue
+                target_silos.add(sid)
+        else:
+            # Fallback: hit all alive followers.
+            for f in self.followers:
+                if f['status'] == 'alive':
+                    target_silos.add(f['silo_id'])
+
+        if not target_silos:
+            print("No target followers for search_text (no candidate silos / no alive followers).")
+            return
+
+        # 2) Send the same prompt to each target follower.
+        for sid in sorted(target_silos):
+            follower = None
+            for f in self.followers:
+                if f['silo_id'] == sid:
+                    follower = f
+                    break
+
+            if follower is None:
+                print(f"Follower with silo_id={sid} not found in leader.followers.")
+                continue
+
+            if follower['status'] != 'alive':
+                print(f"Follower {sid} is not alive (status={follower['status']}). Skip.")
+                continue
+
+            request_id = f"{sid}-{int(time.time() * 1000)}"
+            message = {
+                'message_type': 'search_text',
+                'text': prompt,
+                'top_k': top_k,
+                'request_id': request_id,
+            }
+
+            try:
+                tcp_client(follower['host'], follower['port'], message)
+                print(
+                    f"Sent search_text to follower {sid} "
+                    f"(host={follower['host']}, port={follower['port']}), "
+                    f"request_id={request_id}"
+                )
+            except ConnectionRefusedError:
+                print(
+                    f"Failed to send search_text to follower {sid} "
+                    f"(host={follower['host']}, port={follower['port']})"
+                )

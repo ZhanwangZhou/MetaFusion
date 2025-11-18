@@ -1,8 +1,8 @@
 import logging
 
 DB_NAME = 'meta_fusion'
-DB_USERNAME = 'zhouzhanwang'
-DB_PASSWORD = 'password'
+DB_USERNAME = 'jiminyang'  # 使用当前系统用户
+DB_PASSWORD = ''  # 本地连接通常不需要密码
 DB_HOST = 'localhost'
 DB_PORT = 5432
 
