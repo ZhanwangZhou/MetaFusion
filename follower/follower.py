@@ -1,8 +1,10 @@
 import threading
 import time
+import base64
 from follower.storage.photo_to_vector import ImageEmbeddingModel
 from follower.storage.vertex_index import FollowerFaissIndex
 from utils.config import *
+from utils.image_utils import *
 from utils.network import tcp_server
 from utils.network import tcp_client
 from utils.network import udp_client
@@ -16,6 +18,7 @@ class Follower:
         self.leader_host = None
         self.leader_port = None
         self.signals = {'shutdown': False}
+        self.base_dir = 'state/follower/'  # TODO: update this with directory from cli
 
         self.model = None
         self.faiss_index = None
@@ -51,6 +54,8 @@ class Follower:
                 self._handle_register_ack(message_dict)
             case 'search_text':
                 self._handle_search_text(message_dict)
+            case 'upload':
+                self._handle_upload(message_dict)
 
     def _handle_register_ack(self, message_dict):
         self.model = ImageEmbeddingModel(message_dict['model_name'],
@@ -148,3 +153,28 @@ class Follower:
                 self.leader_host,
                 self.leader_port,
             )
+
+    def _handle_upload(self, message_dict):
+        photo_id = message_dict['photo_id']
+        photo_name = message_dict['photo_name']
+        photo_format = message_dict['photo_format']
+        image_b64 = message_dict['image_b64']
+        image_bytes = base64.b64decode(image_b64)
+        photos_dir = os.path.join(self.base_dir, 'photos')
+        os.makedirs(photos_dir, exist_ok=True)
+        saved_image_path = os.path.join(photos_dir, f'{photo_id}.{photo_format.lower()}')
+        save_image_bytes(image_bytes, saved_image_path)
+        LOGGER.info(f'Saved uploaded image {photo_name} to {saved_image_path}')
+        vector = self.model.encode(saved_image_path)
+        self.faiss_index.add(vector)
+        LOGGER.info(f'Added uploaded image {photo_name} to local vector index')
+        metadata = extract_photo_metadata(saved_image_path)
+        metadata['photo_id'] = photo_id
+        metadata['photo_name'] = photo_name
+        metadata['photo_format'] = photo_format
+        message = {
+            'message_type': 'upload_reply',
+            'silo_id': self.silo_id,
+            'metadata': metadata
+        }
+        tcp_client(self.leader_host, self.leader_port, message)
