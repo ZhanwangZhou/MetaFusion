@@ -2,6 +2,7 @@ import os
 import time
 import threading
 import base64
+from utils.prompt_metadata import PromptMetadataExtractor
 from leader.storage.store import *
 from utils.config import *
 from utils.image_utils import *
@@ -22,6 +23,7 @@ class Leader:
         self.model_name = model_name
         self.device = device
         self.normalize = normalize
+        self.metadata_extractor = PromptMetadataExtractor()
 
         self.check_heartbeat_thread = threading.Thread(target=self._check_heartbeat)
         self.udp_listen_thread = threading.Thread(
@@ -97,7 +99,7 @@ class Leader:
         host = message_dict['host']
         port = message_dict['port']
         for i, follower in enumerate(self.followers):
-            if follower['host'] == 'host' and follower['port'] == port:
+            if follower['host'] == host and follower['port'] == port:
                 silo_id = i
                 follower['status'] = 'alive'
                 follower['heartbeat'] = time.time()
