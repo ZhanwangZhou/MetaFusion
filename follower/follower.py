@@ -49,6 +49,8 @@ class Follower:
         match message_dict['message_type']:
             case 'register_ack':
                 self._handle_register_ack(message_dict)
+            case 'search_text':
+                self._handle_search_text(message_dict)
 
     def _handle_register_ack(self, message_dict):
         self.model = ImageEmbeddingModel(message_dict['model_name'],
@@ -62,3 +64,87 @@ class Follower:
         self.leader_port = message_dict['leader_port']
         LOGGER.info('Follower %d registered\n', self.silo_id)
         self.heartbeat_thread.start()
+
+    def _handle_search_text(self, message_dict):
+        """
+        Handle a text-to-image search request from the leader.
+
+        Expected message_dict format:
+            {
+                "message_type": "search_text",
+                "text": "<user natural language query>",
+                "top_k": 10,              # optional, default 10
+                "request_id": "<opaque>"  # optional, echoed back in response
+            }
+
+        The follower will:
+            1) Encode the text into a CLIP text embedding.
+            2) Query the local FAISS index for nearest neighbors.
+            3) Send results back to the leader via TCP as:
+                {
+                    "message_type": "search_text_result",
+                    "silo_id": <int>,
+                    "request_id": "<same as request>",
+                    "results": [
+                        {"vector_id": int, "score": float},
+                        ...
+                    ]
+                }
+        """
+        if self.model is None or self.faiss_index is None:
+            # Follower has not been fully initialized yet; ignore the request.
+            LOGGER.warning("Received search_text before follower was initialized")
+            return
+
+        text = message_dict.get("text", "")
+        if not text:
+            LOGGER.warning("Received search_text with empty text")
+            return
+
+        top_k = message_dict.get("top_k", 10)
+        try:
+            top_k = int(top_k)
+        except (TypeError, ValueError):
+            top_k = 10
+
+        # 1) Encode text into CLIP embedding
+        query_vec = self.model.encode_text(text)
+
+        # 2) Search local FAISS index
+        distances, indices = self.faiss_index.search(query_vec, top_k)
+
+        # 3) Prepare response payload
+        results = []
+        for idx, dist in zip(indices, distances):
+            if idx == -1:
+                # FAISS uses -1 as a sentinel for "no result" in some cases.
+                continue
+            results.append(
+                {
+                    "vector_id": int(idx),
+                    "score": float(dist),
+                }
+            )
+
+        response = {
+            "message_type": "search_text_result",
+            "silo_id": self.silo_id,
+            "request_id": message_dict.get("request_id"),
+            "results": results,
+        }
+
+        # Send results back to leader
+        try:
+            tcp_client(self.leader_host, self.leader_port, response)
+            LOGGER.info(
+                "Follower %d served search_text (top_k=%d, results=%d)",
+                self.silo_id,
+                top_k,
+                len(results),
+            )
+        except ConnectionRefusedError:
+            LOGGER.error(
+                "Failed to send search_text_result back to leader %s:%d",
+                self.leader_host,
+                self.leader_port,
+            )
