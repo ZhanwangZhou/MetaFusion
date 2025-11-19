@@ -50,7 +50,8 @@ def extract_photo_metadata(image_path: str) -> dict:
     Extract photo metadata of the image at image_path.
     """
     exif_data = _extract_exif(image_path)
-    timestamp = exif_data.get('DateTimeOriginal') or exif_data.get('DateTime')
+    timestamp = exif_data.get('DateTimeOriginal') or exif_data.get('DateTime') \
+                or None
     lat, lon = _extract_gps(exif_data)
     return {
         'timestamp': timestamp,
@@ -66,9 +67,12 @@ def _extract_exif(image_path: str) -> dict:
     Extract EXIF metadata of the image at image_path.
     """
     image = Image.open(image_path)
+    exif_info = image._getexif()
+    if exif_info is None:
+        return {}
     exif_data = {
         TAGS[k]: v
-        for k, v in image._getexif().items()
+        for k, v in exif_info.items()
         if k in TAGS
     }
     return exif_data
@@ -80,7 +84,7 @@ def _extract_gps(exif_data):
     """
     gps_info = exif_data.get('GPSInfo')
     if not gps_info:
-        return None
+        return None, None
     gps_data = {
         GPSTAGS.get(key, key): gps_info[key]
         for key in gps_info
