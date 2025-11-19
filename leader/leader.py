@@ -171,7 +171,18 @@ class Leader:
         for r in results:
             vid = r.get('vector_id')
             score = r.get('score')
-            print(f"  vector_id={vid}, score={score}")
+            photo_id = r.get('photo_id')
+            photo_name = r.get('photo_name')
+            has_image = 'image_b64' in r
+
+            line = f"  vector_id={vid}, score={score}"
+            if photo_id:
+                line += f", photo_id={photo_id}"
+            if photo_name:
+                line += f", photo_name={photo_name}"
+            if has_image:
+                line += " [image_b64 attached]"
+            print(line)
 
     def search_text(self, prompt: str, candidate_silo_ids=None, top_k: int = 5):
         """

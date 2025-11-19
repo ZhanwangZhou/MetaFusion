@@ -1,6 +1,8 @@
+import base64
+import os
 import threading
 import time
-import base64
+
 from follower.storage.photo_to_vector import ImageEmbeddingModel
 from follower.storage.vertex_index import FollowerFaissIndex
 from utils.config import *
@@ -23,6 +25,9 @@ class Follower:
 
         self.model = None
         self.faiss_index = None
+        # In-memory mapping: vector_id -> metadata about the stored photo.
+        # This lets us map FAISS search results back to concrete photos.
+        self.vector_map = {}
 
         self.heartbeat_thread = threading.Thread(target=self._heartbeat)
         self.tcp_listen_thread = threading.Thread(
@@ -65,13 +70,16 @@ class Follower:
         self.base_dir = os.path.join(message_dict['base_dir'],
                                      f'follower{self.silo_id}')
         self.index_path = os.path.join(self.base_dir, 'faiss.index')
+
         self.model = ImageEmbeddingModel(message_dict['model_name'],
                                          message_dict['device'],
                                          message_dict['normalize'])
         self.faiss_index = FollowerFaissIndex(self.index_path,
                                               self.model.embedding_dim)
         self.faiss_index.save()
-        LOGGER.info('Follower %d registered\n', self.silo_id)
+
+        LOGGER.info('Follower %d registered (base_dir=%s, index_path=%s)\n',
+                    self.silo_id, self.base_dir, self.index_path)
         self.heartbeat_thread.start()
 
     def _handle_search_text(self, message_dict):
@@ -122,18 +130,39 @@ class Follower:
         # 2) Search local FAISS index
         distances, indices = self.faiss_index.search(query_vec, top_k)
 
-        # 3) Prepare response payload
+        # 3) Prepare response payload.
+        # Try to enrich results with photo metadata if we have a mapping.
         results = []
         for idx, dist in zip(indices, distances):
             if idx == -1:
                 # FAISS uses -1 as a sentinel for "no result" in some cases.
                 continue
-            results.append(
-                {
-                    "vector_id": int(idx),
-                    "score": float(dist),
-                }
-            )
+            item = {
+                "vector_id": int(idx),
+                "score": float(dist),
+            }
+
+            photo_meta = self.vector_map.get(int(idx))
+            if photo_meta:
+                item["photo_id"] = photo_meta.get("photo_id")
+                item["photo_name"] = photo_meta.get("photo_name")
+                item["photo_format"] = photo_meta.get("photo_format")
+
+                # Optionally include the raw image bytes as base64 so that the
+                # leader can reconstruct or save the original photo.
+                try:
+                    with open(photo_meta.get("path"), "rb") as f:
+                        img_bytes = f.read()
+                    item["image_b64"] = base64.b64encode(img_bytes).decode("ascii")
+                except Exception as e:
+                    LOGGER.warning(
+                        "Failed to read image for vector_id=%d at %s: %s",
+                        idx,
+                        photo_meta.get("path"),
+                        e,
+                    )
+
+            results.append(item)
 
         response = {
             "message_type": "search_text_result",
@@ -170,8 +199,19 @@ class Follower:
         save_image_bytes(image_bytes, saved_image_path)
         LOGGER.info(f'Saved uploaded image {photo_name} to {saved_image_path}')
         vector = self.model.encode(saved_image_path)
-        self.faiss_index.add(vector)
-        LOGGER.info(f'Added uploaded image {photo_name} to local vector index')
+        vector_id = self.faiss_index.add(vector)
+        # Record mapping from vector_id back to photo metadata and path.
+        self.vector_map[vector_id] = {
+            "photo_id": photo_id,
+            "photo_name": photo_name,
+            "photo_format": photo_format,
+            "path": saved_image_path,
+        }
+        LOGGER.info(
+            'Added uploaded image %s to local vector index as vector_id=%d',
+            photo_name,
+            vector_id,
+        )
         metadata = extract_photo_metadata(saved_image_path)
         metadata['photo_id'] = photo_id
         metadata['photo_name'] = photo_name

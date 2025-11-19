@@ -24,3 +24,7 @@ venv3/
 # Google Drive and Dropbox
 Icon
 .dropbox*
+
+# Project-specific: local state and test assets
+state/
+tests/text_search_feature/images/
