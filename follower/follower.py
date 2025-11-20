@@ -30,6 +30,7 @@ class Follower:
         self.model: Optional[ImageEmbeddingModel] = None
         self.faiss_index: Optional[FollowerFaissIndex] = None
         self.conn: Optional[psycopg2.extensions.connection] = None
+        self.psql_table_name = DB_FOLLOWER_TABLE_NAME
 
         self.heartbeat_thread = threading.Thread(target=self._heartbeat)
         self.tcp_listen_thread = threading.Thread(
@@ -86,7 +87,8 @@ class Follower:
         self.faiss_index = FollowerFaissIndex(self.index_path,
                                               self.model.embedding_dim)
         self.faiss_index.save()
-        self.conn = init_vector_table()
+        self.psql_table_name = f'{DB_FOLLOWER_TABLE_NAME}{self.silo_id}'
+        self.conn = init_vector_table(table=self.psql_table_name)
 
         LOGGER.info('Follower %d registered (base_dir=%s, index_path=%s)\n',
                     self.silo_id, self.base_dir, self.index_path)
@@ -110,7 +112,7 @@ class Follower:
             if idx == -1:
                 # FAISS uses -1 as a sentinel for "no result" in some cases.
                 continue
-            query_result = query_by_vector_id(self.conn, idx)
+            query_result = query_by_vector_id(self.conn, idx, table=self.psql_table_name)
             if query_result:
                 _, photo_id, photo_name, photo_format, saved_path = query_result
             else:
@@ -163,7 +165,7 @@ class Follower:
             'photo_format': photo_format,
             'saved_path': saved_image_path,
         }
-        insert_new_photo_vector(self.conn, insert_data)
+        insert_new_photo_vector(self.conn, insert_data, table=self.psql_table_name)
         LOGGER.info('Added uploaded image %s to local vector index as vector_id=%d',
                     photo_name, vector_id, )
 
@@ -178,7 +180,7 @@ class Follower:
 
     def _handle_clear(self):
         self.faiss_index.clear()
-        clear_all(self.conn)
+        clear_all(self.conn, table=self.psql_table_name)
         for filename in os.listdir(self.photos_dir):
             filepath = os.path.join(self.photos_dir, filename)
             if os.path.isfile(filepath):

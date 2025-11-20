@@ -61,6 +61,9 @@ class Leader:
         image_hash = hash_image_bytes(image_bytes)
         photo_name = os.path.basename(image_path)
         photo_id = image_hash  # can be updated later with upload_time/user_id
+        if query_by_photo_id(self.conn, photo_id):
+            print(photo_name, 'has already been stored')
+            return
         digest = hashlib.sha256(photo_id.encode("utf-8")).hexdigest()
         index = int(digest, 16) % len(self.followers)
         image_b64 = base64.b64encode(image_bytes).decode("ascii")
@@ -75,8 +78,14 @@ class Leader:
                    self.followers[index]['port'],
                    message)
 
+    def mass_upload(self, image_dir):
+        photo_paths = list_photo_paths(image_dir)
+        for photo_path in photo_paths:
+            self.upload(photo_path)
+
     def search(self, prompt, output_path=None, vector_search=True):
         metadata = extract_prompt_meta(prompt)
+        LOGGER.info('Extracted prompt meta data: %s', metadata)
 
         # Filter silos by metadata
         cand_silos = prefilter_candidate_silos(self.conn, metadata)
@@ -109,7 +118,8 @@ class Leader:
         if output_path and os.path.isdir(output_path):
             message['message_type'] = 'get'
             message['output_path'] = output_path
-        for silo_id in silo_ids:
+        for silo_id, num in cand_silos:
+            message['top_k'] = max(num * 2, VECTOR_SEARCH_TOP_K)
             follower = self.followers[silo_id]
             if follower.get('status') != 'alive':
                 follower['pending_message'][request_id](message)
@@ -189,7 +199,8 @@ class Leader:
         silo_id = message_dict['silo_id']
         metadata = message_dict['metadata']
         insert_new_photo(self.conn, silo_id, metadata)
-        LOGGER.info(f'Inserted photo {metadata["photo_name"]} into metadata database')
+        LOGGER.info(f'Inserted photo {metadata["photo_name"]} into metadata database.'
+                    f'Assigned to follower {silo_id}')
 
     def _handle_search_result(self, message_dict, get_photo=False):
         """

@@ -45,6 +45,19 @@ def hash_image_bytes(data: bytes, algorithm: str = "sha256") -> str:
     return h.hexdigest()
 
 
+def list_photo_paths(directory: str):
+    """
+    Return a list of full paths to all photos in the directory.
+    """
+    extensions = {".jpg", ".jpeg", ".png"}
+    paths = []
+    for name in os.listdir(directory):
+        full = os.path.join(directory, name)
+        if os.path.isfile(full) and os.path.splitext(name)[1].lower() in extensions:
+            paths.append(full)
+    return paths
+
+
 def extract_photo_metadata(image_path: str) -> dict:
     """
     Extract photo metadata of the image at image_path.

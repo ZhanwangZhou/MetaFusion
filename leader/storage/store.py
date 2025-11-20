@@ -71,6 +71,17 @@ def clear_all_photos(conn, table='photos_meta'):
     cur.close()
 
 
+def query_by_photo_id(conn, photo_id, table=DB_LEADER_TABLE_NAME):
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT photo_id FROM {table}
+        WHERE photo_id = '{photo_id}'
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    return rows
+
+
 def prefilter_candidate_silos(conn, metadata, limit=None, table=DB_LEADER_TABLE_NAME):
     """
     Prefilter silos based on metadata, returning matching counts per silo:

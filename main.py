@@ -48,6 +48,10 @@ def leader(
                         print('Usage: upload <image path>')
                         continue
                     leader_node.upload(arg)
+                case 'mass_upload':
+                    if not arg:
+                        print('Usage: upload <image directory>')
+                    leader_node.mass_upload(arg)
                 case 'clear':
                     leader_node.clear()
                 case 'search':

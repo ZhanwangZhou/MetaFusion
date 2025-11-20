@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any, Tuple
 from utils.config import LOGGER
 from utils.geocode import geocode_bbox
+import re
 import dateparser
 import spacy
 
@@ -119,47 +120,67 @@ class PromptMetadataExtractor:
     # -------- Internal: time range extraction --------
     def _extract_time_range(self, doc, prompt: str) -> Tuple[Optional[datetime], Optional[datetime]]:
         """
-        Simple strategy:
-        - Find the first DATE entity and parse it with dateparser
-        - If it looks like a 'year-month' (e.g., June 2025), expand to the whole month
-        - If only a single point is parsed, set start == end
+        Strategy:
+        - Find the first DATE entity and parse it with dateparser.
+        - If it looks like:
+            * year-only:      expand to whole year
+            * year-month:     expand to whole month
+            * full date:      expand to that day (00:00–23:59:59.999999)
+        - If no DATE entity, fall back to parsing the whole prompt.
         """
         date_text = None
         for ent in doc.ents:
             if ent.label_ == "DATE":
-                date_text = ent.text
+                date_text = ent.text.strip()
                 break
 
         if not date_text:
-            # Try parsing the entire prompt with dateparser as a fallback
-            dt = dateparser.parse(prompt)
-            return dt, dt
+            # Fallback: try parsing the entire prompt
+            date_text = prompt.strip()
 
         dt = dateparser.parse(date_text)
         if not dt:
             return None, None
 
-    # Non-strict check: determine if the text looks like 'month name + year'
-        lower = date_text.lower()
+        # Normalize parsed datetime (we'll set precise bounds below)
+        dt = dt.replace(tzinfo=None)
+
+        text = date_text.strip()
+        lower = text.lower()
+
+        # 1) Year-only: "2025"
+        if re.fullmatch(r"\d{4}", text):
+            year = dt.year
+            start = datetime(year, 1, 1, 0, 0, 0, 0)
+            end = datetime(year, 12, 31, 23, 59, 59, 999999)
+            return start, end
+
+        # 2) Month-name + year: "June 2025", "november 2024", etc.
         months = [
             "january", "february", "march", "april", "may", "june",
             "july", "august", "september", "october", "november", "december"
         ]
-        if any(m in lower for m in months) and any(c.isdigit() for c in lower):
-            # Construct the start and end of that month (simplified)
-            start = dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            # Naively add one month to form the end
-            if dt.month == 12:
-                end = dt.replace(year=dt.year + 1, month=1, day=1,
-                                 hour=0, minute=0, second=0, microsecond=0)
+        looks_like_month_name_year = any(m in lower for m in months) and any(c.isdigit() for c in lower)
+
+        # Also treat numeric "YYYY/MM" or "YYYY-MM" as year-month
+        looks_like_numeric_year_month = bool(re.fullmatch(r"\d{4}[-/]\d{1,2}", text))
+
+        if looks_like_month_name_year or looks_like_numeric_year_month:
+            year = dt.year
+            month = dt.month
+            start = datetime(year, month, 1, 0, 0, 0, 0)
+            # end = last microsecond of the month
+            if month == 12:
+                next_month_start = datetime(year + 1, 1, 1, 0, 0, 0, 0)
             else:
-                end = dt.replace(month=dt.month + 1, day=1,
-                                 hour=0, minute=0, second=0, microsecond=0)
+                next_month_start = datetime(year, month + 1, 1, 0, 0, 0, 0)
+            end = next_month_start - timedelta(microseconds=1)
             return start, end
 
-        # Otherwise treat as a single-point date
-        dt = dt.replace(hour=0, minute=0, second=0, microsecond=0)
-        return dt, dt
+        # 3) Otherwise: treat as a specific day
+        day_start = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+        return day_start, day_end
 
     # -------- Internal: tag extraction --------
     def _extract_tags(self, doc, locations: List[str]) -> List[str]:
