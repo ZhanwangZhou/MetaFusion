@@ -1,8 +1,7 @@
 import base64
-import os
 import threading
 import time
-
+from typing import Optional
 from follower.storage.photo_to_vector import ImageEmbeddingModel
 from follower.storage.vertex_index import FollowerFaissIndex
 from utils.config import *
@@ -21,10 +20,11 @@ class Follower:
         self.leader_port = None
         self.signals = {'shutdown': False}
         self.base_dir = None
+        self.photos_dir = None
         self.index_path = None
 
-        self.model = None
-        self.faiss_index = None
+        self.model: Optional[ImageEmbeddingModel] = None
+        self.faiss_index: Optional[FollowerFaissIndex] = None
         # In-memory mapping: vector_id -> metadata about the stored photo.
         # This lets us map FAISS search results back to concrete photos.
         self.vector_map = {}
@@ -62,6 +62,8 @@ class Follower:
                 self._handle_search_text(message_dict)
             case 'upload':
                 self._handle_upload(message_dict)
+            case 'clear':
+                self._handle_clear()
 
     def _handle_register_ack(self, message_dict):
         self.silo_id = message_dict['silo_id']
@@ -69,6 +71,9 @@ class Follower:
         self.leader_port = message_dict['leader_port']
         self.base_dir = os.path.join(message_dict['base_dir'],
                                      f'follower{self.silo_id}')
+        os.makedirs(self.base_dir, exist_ok=True)
+        self.photos_dir = os.path.join(self.base_dir, 'photos')
+        os.makedirs(self.photos_dir, exist_ok=True)
         self.index_path = os.path.join(self.base_dir, 'faiss.index')
 
         self.model = ImageEmbeddingModel(message_dict['model_name'],
@@ -119,17 +124,14 @@ class Follower:
             return
 
         top_k = message_dict.get("top_k", 10)
-        try:
-            top_k = int(top_k)
-        except (TypeError, ValueError):
-            top_k = 10
 
+        LOGGER.info('Start prompt vectorization')
         # 1) Encode text into CLIP embedding
         query_vec = self.model.encode_text(text)
-
+        LOGGER.info('Start search')
         # 2) Search local FAISS index
         distances, indices = self.faiss_index.search(query_vec, top_k)
-
+        LOGGER.info('Prepare result')
         # 3) Prepare response payload.
         # Try to enrich results with photo metadata if we have a mapping.
         results = []
@@ -193,13 +195,12 @@ class Follower:
         photo_format = message_dict['photo_format']
         image_b64 = message_dict['image_b64']
         image_bytes = base64.b64decode(image_b64)
-        photos_dir = os.path.join(self.base_dir, 'photos')
-        os.makedirs(photos_dir, exist_ok=True)
-        saved_image_path = os.path.join(photos_dir, f'{photo_id}.{photo_format.lower()}')
+        saved_image_path = os.path.join(self.photos_dir, f'{photo_id}.{photo_format.lower()}')
         save_image_bytes(image_bytes, saved_image_path)
         LOGGER.info(f'Saved uploaded image {photo_name} to {saved_image_path}')
         vector = self.model.encode(saved_image_path)
         vector_id = self.faiss_index.add(vector)
+        self.faiss_index.save()
         # Record mapping from vector_id back to photo metadata and path.
         self.vector_map[vector_id] = {
             "photo_id": photo_id,
@@ -222,3 +223,14 @@ class Follower:
             'metadata': metadata
         }
         tcp_client(self.leader_host, self.leader_port, message)
+
+    def _handle_clear(self):
+        self.faiss_index.clear()
+        for filename in os.listdir(self.photos_dir):
+            filepath = os.path.join(self.photos_dir, filename)
+            if os.path.isfile(filepath):
+                try:
+                    os.remove(filepath)
+                except Exception as e:
+                    LOGGER.warning(f'Failed to remove {filepath}', e)
+        LOGGER.info("Cleared the vector index and all photos")

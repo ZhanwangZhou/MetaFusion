@@ -112,9 +112,11 @@ class Leader:
             tcp_client(follower['host'], follower['port'], message)
 
     def clear(self):
-        # TODO: Clear the follower local store
         clear_all_photos(self.conn)
         LOGGER.info('Cleared photos in metadata database')
+        message = {'message_type': 'clear'}
+        for follower in self.followers:
+            tcp_client(follower['host'], follower['port'], message)
 
     def _check_heartbeat(self):
         while not self.signals['shutdown']:

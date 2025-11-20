@@ -1,10 +1,9 @@
 # follower/local_storage/vector_index.py
 
 import os
-from typing import Optional, Tuple
-
 import faiss
 import numpy as np
+from typing import Optional, Tuple
 
 
 class FollowerFaissIndex:
@@ -13,10 +12,10 @@ class FollowerFaissIndex:
     """
 
     def __init__(
-        self,
-        index_path: str,
-        embedding_dim: int,
-        metric: str = "l2",   # or "ip" for inner product / cosine
+            self,
+            index_path: str,
+            embedding_dim: int,
+            metric: str = "l2",  # or "ip" for inner product / cosine
     ):
         self.index_path = index_path
         self.embedding_dim = embedding_dim
@@ -81,3 +80,18 @@ class FollowerFaissIndex:
         distances, indices = self.index.search(query, top_k)
         # FAISS returns shape (1, top_k) for a single query.
         return distances[0], indices[0]
+
+    def clear(self):
+        """
+        Remove all vectors from the index by recreating a fresh empty index.
+        Resets next_id to 0 and overwrites the saved index file.
+        """
+        if self.metric == "l2":
+            self.index = faiss.IndexFlatL2(self.embedding_dim)
+        elif self.metric == "ip":
+            self.index = faiss.IndexFlatIP(self.embedding_dim)
+        else:
+            raise ValueError(f"Unsupported metric: {self.metric}")
+        self.next_id = 0
+        self.save()
+
