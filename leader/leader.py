@@ -2,6 +2,7 @@ import os
 import time
 import threading
 import base64
+from typing import List, Dict, Optional, Any
 from leader.storage.store import *
 from utils.config import *
 from utils.image_utils import *
@@ -16,8 +17,8 @@ class Leader:
         self.host = host
         self.port = port
         self.signals = {'shutdown': False}
-        self.followers = []
-        self.pending_client_request = {}
+        self.followers: List[Dict[str, Optional[Any]]] = []
+        self.pending_client_request: Dict[str, Dict[str, Optional[Any]]] = {}
 
         # Unified follower index/model parameters
         self.base_dir = base_dir
@@ -74,7 +75,7 @@ class Leader:
                    self.followers[index]['port'],
                    message)
 
-    def search(self, prompt, vector_search=True):
+    def search(self, prompt, output_path=None, vector_search=True):
         metadata = extract_prompt_meta(prompt)
 
         # Filter silos by metadata
@@ -91,19 +92,23 @@ class Leader:
             LOGGER.debug(f"Found {len(candidates)} candidate photos, sample: %s",
                          candidates[:5])
             return
-        silo_ids = {int(s) for (s, _) in cand_silos}
+        silo_ids = {s for (s, _) in cand_silos}
         request_id = f"search-{int(time.time() * 10000)}"
         self.pending_client_request[request_id] = {
-            'arg': prompt,
-            'recipient': silo_ids,
-            'last_check': time.time()
+            'prompt': prompt,
+            'recipients': silo_ids,
+            'last_check': time.time(),
+            'result': []
         }
         message = {
-            'message_type': 'search_text',
+            'message_type': 'search',
             'request_id': request_id,
             'text': prompt,
             'top_k': VECTOR_SEARCH_TOP_K,
         }
+        if output_path and os.path.isdir(output_path):
+            message['message_type'] = 'get'
+            message['output_path'] = output_path
         for silo_id in silo_ids:
             follower = self.followers[silo_id]
             if follower.get('status') != 'alive':
@@ -121,7 +126,7 @@ class Leader:
     def _check_heartbeat(self):
         while not self.signals['shutdown']:
             for follower in self.followers:
-                if follower['status'] == 'alive' and\
+                if follower['status'] == 'alive' and \
                         time.time() - follower['heartbeat'] > FOLLOWER_TIMEOUT:
                     follower['status'] = 'dead'
                     LOGGER.info('Set follower %d to dead' % (follower['silo_id']))
@@ -138,8 +143,10 @@ class Leader:
                 self._handle_register(message_dict)
             case 'upload_reply':
                 self._handle_upload_reply(message_dict)
-            case 'search_text_result':
-                self._handle_search_text_result(message_dict)
+            case 'search_result':
+                self._handle_search_result(message_dict)
+            case 'get_result':
+                self._handle_search_result(message_dict, get_photo=True)
 
     def _handle_register(self, message_dict):
         host = message_dict['host']
@@ -184,42 +191,32 @@ class Leader:
         insert_new_photo(self.conn, silo_id, metadata)
         LOGGER.info(f'Inserted photo {metadata["photo_name"]} into metadata database')
 
-    def _handle_search_text_result(self, message_dict):
+    def _handle_search_result(self, message_dict, get_photo=False):
         """
         Handle text-to-image search results coming back from a follower.
-
-        Expected message_dict format (from follower._handle_search_text):
-            {
-                "message_type": "search_text_result",
-                "silo_id": int,
-                "request_id": str or None,
-                "results": [
-                    {"vector_id": int, "score": float},
-                    ...
-                ]
-            }
         """
         silo_id = message_dict.get('silo_id')
         request_id = message_dict.get('request_id')
         results = message_dict.get('results', [])
-
-        print(f"[search_text_result] from follower {silo_id}, request_id={request_id}")
-        if not results:
-            print("  (no results)")
+        request = self.pending_client_request.get(request_id)
+        if not request:
+            LOGGER.warning(f'Receiving unknown search result from follower{silo_id}')
             return
-
-        for r in results:
-            vid = r.get('vector_id')
+        request['recipients'].remove(silo_id)
+        request['result'] += results
+        if len(request['recipients']) > 0:
+            return
+        print('Search results for prompt "{}":'.format(request['prompt']))
+        if not results:
+            print("(no results)")
+            return
+        for r in request['result']:
             score = r.get('score')
-            photo_id = r.get('photo_id')
             photo_name = r.get('photo_name')
-            has_image = 'image_b64' in r
-
-            line = f"  vector_id={vid}, score={score}"
-            if photo_id:
-                line += f", photo_id={photo_id}"
-            if photo_name:
-                line += f", photo_name={photo_name}"
-            if has_image:
-                line += " [image_b64 attached]"
-            print(line)
+            print(f'Filename = {photo_name}, Score = {score}')
+            if get_photo:
+                image_bytes = base64.b64decode(r['image_b64'])
+                output_path = os.path.join(message_dict['output_path'], photo_name)
+                save_image_bytes(image_bytes, output_path)
+                print(f'Saved to {output_path}')
+        self.pending_client_request.pop(request_id)

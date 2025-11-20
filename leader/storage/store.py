@@ -1,4 +1,4 @@
-# leader/storage/store.py  (or leader/storage/db.py)
+# leader/storage/store.py
 import psycopg2
 from datetime import datetime
 from psycopg2.extras import register_default_jsonb
@@ -7,7 +7,7 @@ from utils.config import *
 
 def init_metadata_table(
         database=DB_NAME, username=DB_USERNAME, password=DB_PASSWORD,
-        host=DB_HOST, port=DB_PORT, table='photos_meta'
+        host=DB_HOST, port=DB_PORT, table=DB_LEADER_TABLE_NAME
 ):
     """
     Initialize the global metadata table in PostgreSQL.
@@ -24,7 +24,7 @@ def init_metadata_table(
     cur.execute(f"""
         CREATE TABLE IF NOT EXISTS {table} (
             photo_id   TEXT PRIMARY KEY,
-            silo_id    TEXT NOT NULL,
+            silo_id    INTEGER NOT NULL,
             ts         TIMESTAMPTZ,
             lat        DOUBLE PRECISION,
             lon        DOUBLE PRECISION,
@@ -42,7 +42,7 @@ def init_metadata_table(
     return conn
 
 
-def insert_new_photo(conn, silo_id, metadata, table='photos_meta'):
+def insert_new_photo(conn, silo_id, metadata, table=DB_LEADER_TABLE_NAME):
     cur = conn.cursor()
     timestamp = metadata.get('timestamp')
     if timestamp:
@@ -71,7 +71,7 @@ def clear_all_photos(conn, table='photos_meta'):
     cur.close()
 
 
-def prefilter_candidate_silos(conn, metadata, limit=None, table='photos_meta'):
+def prefilter_candidate_silos(conn, metadata, limit=None, table=DB_LEADER_TABLE_NAME):
     """
     Prefilter silos based on metadata, returning matching counts per silo:
     [(silo_id, count), ...] sorted by count descending
@@ -98,7 +98,8 @@ def prefilter_candidate_silos(conn, metadata, limit=None, table='photos_meta'):
     return rows
 
 
-def fetch_photos_by_metadata(conn, metadata, silo_ids, limit=1000, table='photos_meta'):
+def fetch_photos_by_metadata(conn, metadata, silo_ids, limit=1000,
+                             table=DB_LEADER_TABLE_NAME):
     """
     Query photos by metadata, returning:
     [ { "photo_id": ..., "silo_id": ..., "ts": ..., "lat": ..., "lon": ..., "tags": [...] }, ... ]

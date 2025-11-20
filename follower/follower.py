@@ -1,7 +1,11 @@
 import base64
 import threading
 import time
-from typing import Optional
+from typing import Optional, Any
+
+import psycopg2.extensions
+
+from follower.storage.store import *
 from follower.storage.photo_to_vector import ImageEmbeddingModel
 from follower.storage.vertex_index import FollowerFaissIndex
 from utils.config import *
@@ -25,9 +29,7 @@ class Follower:
 
         self.model: Optional[ImageEmbeddingModel] = None
         self.faiss_index: Optional[FollowerFaissIndex] = None
-        # In-memory mapping: vector_id -> metadata about the stored photo.
-        # This lets us map FAISS search results back to concrete photos.
-        self.vector_map = {}
+        self.conn: Optional[psycopg2.extensions.connection] = None
 
         self.heartbeat_thread = threading.Thread(target=self._heartbeat)
         self.tcp_listen_thread = threading.Thread(
@@ -58,8 +60,10 @@ class Follower:
         match message_dict['message_type']:
             case 'register_ack':
                 self._handle_register_ack(message_dict)
-            case 'search_text':
-                self._handle_search_text(message_dict)
+            case 'search':
+                self._handle_search(message_dict)
+            case 'get':
+                self._handle_search(message_dict, get_photo=True)
             case 'upload':
                 self._handle_upload(message_dict)
             case 'clear':
@@ -82,112 +86,62 @@ class Follower:
         self.faiss_index = FollowerFaissIndex(self.index_path,
                                               self.model.embedding_dim)
         self.faiss_index.save()
+        self.conn = init_vector_table()
 
         LOGGER.info('Follower %d registered (base_dir=%s, index_path=%s)\n',
                     self.silo_id, self.base_dir, self.index_path)
         self.heartbeat_thread.start()
 
-    def _handle_search_text(self, message_dict):
+    def _handle_search(self, message_dict, get_photo=False):
         """
         Handle a text-to-image search request from the leader.
-
-        Expected message_dict format:
-            {
-                "message_type": "search_text",
-                "text": "<user natural language query>",
-                "top_k": 10,              # optional, default 10
-                "request_id": "<opaque>"  # optional, echoed back in response
-            }
-
-        The follower will:
-            1) Encode the text into a CLIP text embedding.
-            2) Query the local FAISS index for nearest neighbors.
-            3) Send results back to the leader via TCP as:
-                {
-                    "message_type": "search_text_result",
-                    "silo_id": <int>,
-                    "request_id": "<same as request>",
-                    "results": [
-                        {"vector_id": int, "score": float},
-                        ...
-                    ]
-                }
         """
         if self.model is None or self.faiss_index is None:
             # Follower has not been fully initialized yet; ignore the request.
             LOGGER.warning("Received search_text before follower was initialized")
             return
 
-        text = message_dict.get("text", "")
-        if not text:
-            LOGGER.warning("Received search_text with empty text")
-            return
+        prompt = message_dict.get('text', '')
+        query_vec = self.model.encode_text(prompt)
+        distances, indices = self.faiss_index.search(query_vec, message_dict['top_k'])
 
-        top_k = message_dict.get("top_k", 10)
-
-        LOGGER.info('Start prompt vectorization')
-        # 1) Encode text into CLIP embedding
-        query_vec = self.model.encode_text(text)
-        LOGGER.info('Start search')
-        # 2) Search local FAISS index
-        distances, indices = self.faiss_index.search(query_vec, top_k)
-        LOGGER.info('Prepare result')
-        # 3) Prepare response payload.
-        # Try to enrich results with photo metadata if we have a mapping.
         results = []
         for idx, dist in zip(indices, distances):
             if idx == -1:
                 # FAISS uses -1 as a sentinel for "no result" in some cases.
                 continue
+            query_result = query_by_vector_id(self.conn, idx)
+            if query_result:
+                _, photo_id, photo_name, photo_format, saved_path = query_result
+            else:
+                continue
             item = {
                 "vector_id": int(idx),
                 "score": float(dist),
+                "photo_id": photo_id,
+                "photo_name": photo_name,
+                "photo_format": photo_format
             }
-
-            photo_meta = self.vector_map.get(int(idx))
-            if photo_meta:
-                item["photo_id"] = photo_meta.get("photo_id")
-                item["photo_name"] = photo_meta.get("photo_name")
-                item["photo_format"] = photo_meta.get("photo_format")
-
-                # Optionally include the raw image bytes as base64 so that the
-                # leader can reconstruct or save the original photo.
+            # Optionally include the raw image bytes as base64 so that the
+            # leader can reconstruct or save the original photo.
+            if get_photo:
                 try:
-                    with open(photo_meta.get("path"), "rb") as f:
-                        img_bytes = f.read()
-                    item["image_b64"] = base64.b64encode(img_bytes).decode("ascii")
+                    image_bytes = read_image_bytes(saved_path)
+                    item["image_b64"] = base64.b64encode(image_bytes).decode("ascii")
                 except Exception as e:
-                    LOGGER.warning(
-                        "Failed to read image for vector_id=%d at %s: %s",
-                        idx,
-                        photo_meta.get("path"),
-                        e,
-                    )
-
+                    LOGGER.warning("Failed to read image for vector_id=%d at %s: %s",
+                                   idx, saved_path, e,)
             results.append(item)
 
-        response = {
-            "message_type": "search_text_result",
+        message = {
+            "message_type": "get_result" if get_photo else "search_result",
             "silo_id": self.silo_id,
             "request_id": message_dict.get("request_id"),
+            "output_path": message_dict.get("output_path"),
             "results": results,
         }
-
-        # Send results back to leader
-        try:
-            tcp_client(self.leader_host, self.leader_port, response)
-            LOGGER.info(
-                "Follower %d served search_text (top_k=%d, results=%d)",
-                self.silo_id,
-                top_k,
-                len(results),
-            )
-        except ConnectionRefusedError:
-            LOGGER.error(
-                "Failed to send search_text_result back to leader %s:%d",
-                self.leader_host,
-                self.leader_port,
-            )
+        tcp_client(self.leader_host, self.leader_port, message)
+        LOGGER.info(f'Sent search result for prompt {prompt} to the leader')
 
     def _handle_upload(self, message_dict):
         photo_id = message_dict['photo_id']
@@ -201,22 +155,20 @@ class Follower:
         vector = self.model.encode(saved_image_path)
         vector_id = self.faiss_index.add(vector)
         self.faiss_index.save()
-        # Record mapping from vector_id back to photo metadata and path.
-        self.vector_map[vector_id] = {
-            "photo_id": photo_id,
-            "photo_name": photo_name,
-            "photo_format": photo_format,
-            "path": saved_image_path,
+
+        insert_data = {
+            'vector_id': vector_id,
+            'photo_id': photo_id,
+            'photo_name': photo_name,
+            'photo_format': photo_format,
+            'saved_path': saved_image_path,
         }
-        LOGGER.info(
-            'Added uploaded image %s to local vector index as vector_id=%d',
-            photo_name,
-            vector_id,
-        )
+        insert_new_photo_vector(self.conn, insert_data)
+        LOGGER.info('Added uploaded image %s to local vector index as vector_id=%d',
+                    photo_name, vector_id, )
+
         metadata = extract_photo_metadata(saved_image_path)
-        metadata['photo_id'] = photo_id
-        metadata['photo_name'] = photo_name
-        metadata['photo_format'] = photo_format
+        metadata = metadata | insert_data
         message = {
             'message_type': 'upload_reply',
             'silo_id': self.silo_id,
@@ -226,6 +178,7 @@ class Follower:
 
     def _handle_clear(self):
         self.faiss_index.clear()
+        clear_all(self.conn)
         for filename in os.listdir(self.photos_dir):
             filepath = os.path.join(self.photos_dir, filename)
             if os.path.isfile(filepath):

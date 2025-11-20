@@ -1,5 +1,7 @@
 import os
 import sys
+import time
+
 import typer
 from leader.leader import Leader
 from follower.follower import Follower
@@ -53,6 +55,12 @@ def leader(
                         print("Usage: search <natural language prompt>")
                         continue
                     leader_node.search(arg)
+                case 'get':
+                    parts = arg.split(maxsplit=1)
+                    if len(parts) <= 1:
+                        print('Usage: get <output directory> <natural language prompt>')
+                        continue
+                    leader_node.search(parts[1], parts[0])
                 case 'exit' | 'quit':
                     print("Bye.")
                     break
@@ -63,6 +71,7 @@ def leader(
         except (KeyboardInterrupt, EOFError):
             print("\nBye.")
             break
+        time.sleep(0.5)
 
 
 @app.command()
