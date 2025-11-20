@@ -1,8 +1,8 @@
 import logging
 
 DB_NAME = 'meta_fusion'
-DB_USERNAME = 'username'
-DB_PASSWORD = 'password'
+DB_USERNAME = 'postgres'
+DB_PASSWORD = '123101'
 DB_HOST = 'localhost'
 DB_PORT = 5432
 DB_LEADER_TABLE_NAME = 'photos_meta'
