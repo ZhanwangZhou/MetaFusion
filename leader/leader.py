@@ -2,10 +2,10 @@ import os
 import time
 import threading
 import base64
-from utils.prompt_metadata import PromptMetadataExtractor
 from leader.storage.store import *
 from utils.config import *
 from utils.image_utils import *
+from utils.prompt_metadata import extract_prompt_meta
 from utils.network import tcp_server
 from utils.network import tcp_client
 from utils.network import udp_server
@@ -17,13 +17,13 @@ class Leader:
         self.port = port
         self.signals = {'shutdown': False}
         self.followers = []
+        self.pending_client_request = {}
 
         # Unified follower index/model parameters
         self.base_dir = base_dir
         self.model_name = model_name
         self.device = device
         self.normalize = normalize
-        self.metadata_extractor = PromptMetadataExtractor()
 
         self.check_heartbeat_thread = threading.Thread(target=self._check_heartbeat)
         self.udp_listen_thread = threading.Thread(
@@ -74,6 +74,43 @@ class Leader:
                    self.followers[index]['port'],
                    message)
 
+    def search(self, prompt, vector_search=True):
+        metadata = extract_prompt_meta(prompt)
+
+        # Filter silos by metadata
+        cand_silos = prefilter_candidate_silos(self.conn, metadata)
+        LOGGER.info("Candidate silos (silo_id, count): %s", cand_silos)
+        if not cand_silos:
+            print("No candidate silos from metadata; skip vector search.")
+            return
+        elif not vector_search:
+            # Query specific photo_ids
+            # TODO: follower subset filter / search without vector for experiment
+            silo_ids = [s for (s, _) in cand_silos]
+            candidates = fetch_photos_by_metadata(self.conn, metadata, silo_ids)
+            LOGGER.debug(f"Found {len(candidates)} candidate photos, sample: %s",
+                         candidates[:5])
+            return
+        silo_ids = {int(s) for (s, _) in cand_silos}
+        request_id = f"search-{int(time.time() * 10000)}"
+        self.pending_client_request[request_id] = {
+            'arg': prompt,
+            'recipient': silo_ids,
+            'last_check': time.time()
+        }
+        message = {
+            'message_type': 'search_text',
+            'request_id': request_id,
+            'text': prompt,
+            'top_k': VECTOR_SEARCH_TOP_K,
+        }
+        for silo_id in silo_ids:
+            follower = self.followers[silo_id]
+            if follower.get('status') != 'alive':
+                follower['pending_message'][request_id](message)
+                continue
+            tcp_client(follower['host'], follower['port'], message)
+
     def clear(self):
         # TODO: Clear the follower local store
         clear_all_photos(self.conn)
@@ -118,7 +155,8 @@ class Leader:
                 'host': host,
                 'port': port,
                 'status': 'alive',
-                'heartbeat': time.time()
+                'heartbeat': time.time(),
+                'pending_message': {}
             }
             self.followers.append(new_follower)
         message = {
@@ -183,70 +221,3 @@ class Leader:
             if has_image:
                 line += " [image_b64 attached]"
             print(line)
-
-    def search_text(self, prompt: str, candidate_silo_ids=None, top_k: int = 5):
-        """
-        Send a text-to-image search request to one or more followers.
-
-        Args:
-            prompt: natural language query string.
-            candidate_silo_ids: list of silo_id values (typically strings from DB).
-                                If None or empty, fall back to all alive followers.
-            top_k: how many nearest neighbors to request from each follower.
-        """
-        # 1) Decide which follower silo_ids to hit.
-        target_silos = set()
-
-        if candidate_silo_ids:
-            for s in candidate_silo_ids:
-                try:
-                    sid = int(s)
-                except (TypeError, ValueError):
-                    continue
-                target_silos.add(sid)
-        else:
-            # Fallback: hit all alive followers.
-            for f in self.followers:
-                if f['status'] == 'alive':
-                    target_silos.add(f['silo_id'])
-
-        if not target_silos:
-            print("No target followers for search_text (no candidate silos / no alive followers).")
-            return
-
-        # 2) Send the same prompt to each target follower.
-        for sid in sorted(target_silos):
-            follower = None
-            for f in self.followers:
-                if f['silo_id'] == sid:
-                    follower = f
-                    break
-
-            if follower is None:
-                print(f"Follower with silo_id={sid} not found in leader.followers.")
-                continue
-
-            if follower['status'] != 'alive':
-                print(f"Follower {sid} is not alive (status={follower['status']}). Skip.")
-                continue
-
-            request_id = f"{sid}-{int(time.time() * 1000)}"
-            message = {
-                'message_type': 'search_text',
-                'text': prompt,
-                'top_k': top_k,
-                'request_id': request_id,
-            }
-
-            try:
-                tcp_client(follower['host'], follower['port'], message)
-                print(
-                    f"Sent search_text to follower {sid} "
-                    f"(host={follower['host']}, port={follower['port']}), "
-                    f"request_id={request_id}"
-                )
-            except ConnectionRefusedError:
-                print(
-                    f"Failed to send search_text to follower {sid} "
-                    f"(host={follower['host']}, port={follower['port']})"
-                )

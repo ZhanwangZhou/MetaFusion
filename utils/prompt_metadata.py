@@ -4,13 +4,45 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import List, Optional, Dict, Any, Tuple
-
+from utils.config import LOGGER
+from utils.geocode import geocode_bbox
 import dateparser
 import spacy
 
 
 # Global lazy-loaded spaCy model to avoid reloading every time
 _NLP = None
+
+
+def extract_prompt_meta(prompt: str) -> dict:
+    extractor = PromptMetadataExtractor()
+    meta = extractor.extract(prompt)
+    LOGGER.debug("Parsed metadata:", meta.to_dict())
+
+    min_lat, max_lat, min_lon, max_lon = -90, 90, -180, 180
+
+    # If a location was extracted (e.g., ["Yosemite"]), geocode the first place
+    if meta.locations:
+        bbox = geocode_bbox(meta.locations[0], radius_km=50.0)
+        if bbox is not None:
+            min_lat, max_lat, min_lon, max_lon = bbox
+            LOGGER.info(
+                f"Geocoded location '{meta.locations[0]}' "
+                f"-> bbox: lat[{min_lat: .4f}, {max_lat: .4f}], "
+                f"lon[{min_lon: .4f}, {max_lon: .4f}]"
+            )
+        else:
+            LOGGER.warning(f"Warning: could not geocode location: {meta.locations[0]}")
+
+    return {
+        'start_ts': meta.start_ts or datetime.min,
+        'end_ts': meta.end_ts or datetime.max,
+        'min_lat': min_lat,
+        'max_lat': max_lat,
+        'min_lon': min_lon,
+        'max_lon': max_lon,
+        'any_tags': meta.tags or None
+    }
 
 
 def _get_nlp():
