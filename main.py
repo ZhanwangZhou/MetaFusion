@@ -58,7 +58,7 @@ def leader(
                     if not arg:
                         print("Usage: search <natural language prompt>")
                         continue
-                    leader_node.search(arg, vector_search=True, search_mode='metafusion')
+                    leader_node.search(arg, search_mode='meta_fusion')
                 case 'search_metadata':
                     if not arg:
                         print("Usage: search_metadata <natural language prompt>")
@@ -68,23 +68,13 @@ def leader(
                     if not arg:
                         print("Usage: search_vector <natural language prompt>")
                         continue
-                    leader_node.search(arg, vector_search=True, search_mode='vector_only')
-                case 'search_metafusion':
-                    if not arg:
-                        print("Usage: search_metafusion <natural language prompt>")
-                        continue
-                    leader_node.search(arg, vector_search=True, search_mode='metafusion')
-                case 'compare':
-                    if not arg:
-                        print("Usage: compare <natural language prompt>")
-                        continue
-                    leader_node.compare_search_methods(arg)
+                    leader_node.search(arg, search_mode='vector_only')
                 case 'get':
                     parts = arg.split(maxsplit=1)
                     if len(parts) <= 1:
                         print('Usage: get <output directory> <natural language prompt>')
                         continue
-                    leader_node.search(parts[1], parts[0], vector_search=True, search_mode='metafusion')
+                    leader_node.search(parts[1], parts[0], search_mode='meta_fusion')
                 case 'help':
                     print("\n可用命令:")
                     print("  ls                          - 列出所有follower节点")
@@ -94,7 +84,6 @@ def leader(
                     print("  search <prompt>             - MetaFusion搜索 (默认)")
                     print("  search_metadata <prompt>    - 仅元数据搜索")
                     print("  search_vector <prompt>      - 仅向量搜索")
-                    print("  search_metafusion <prompt>  - MetaFusion搜索")
                     print("  compare <prompt>            - 比较三种搜索方法")
                     print("  get <dir> <prompt>          - 搜索并下载图片")
                     print("  help                        - 显示帮助信息")

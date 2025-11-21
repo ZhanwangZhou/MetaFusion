@@ -1,8 +1,8 @@
 import logging
 
 DB_NAME = 'meta_fusion'
-DB_USERNAME = 'postgres'
-DB_PASSWORD = '123101'
+DB_USERNAME = 'username'
+DB_PASSWORD = 'password'
 DB_HOST = 'localhost'
 DB_PORT = 5432
 DB_LEADER_TABLE_NAME = 'photos_meta'
@@ -15,3 +15,4 @@ FOLLOWER_HEARTBEAT_INTERVAL = 2
 FOLLOWER_TIMEOUT = 10
 
 VECTOR_SEARCH_TOP_K = 5
+VECTOR_SCORE_FILTER_PORTION = 0.5

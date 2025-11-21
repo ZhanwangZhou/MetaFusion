@@ -11,7 +11,6 @@ def init_metadata_table(
 ):
     """
     Initialize the global metadata table in PostgreSQL.
-    TODO: adapt more metadata type. E.g. photo original name, camera model
     """
     register_default_jsonb(loads=None)
     conn = psycopg2.connect(
@@ -23,13 +22,16 @@ def init_metadata_table(
 
     cur.execute(f"""
         CREATE TABLE IF NOT EXISTS {table} (
-            photo_id   TEXT PRIMARY KEY,
-            silo_id    INTEGER NOT NULL,
-            ts         TIMESTAMPTZ,
-            lat        DOUBLE PRECISION,
-            lon        DOUBLE PRECISION,
-            tags       TEXT[] DEFAULT '{{}}',
-            extra      JSONB  DEFAULT '{{}}'::jsonb
+            photo_id    TEXT PRIMARY KEY,
+            silo_id     INTEGER NOT NULL,
+            photo_name  TEXT,
+            ts          TIMESTAMPTZ,
+            lat         DOUBLE PRECISION,
+            lon         DOUBLE PRECISION,
+            cam_make    TEXT,
+            cam_model   TEXT,
+            tags        TEXT[] DEFAULT '{{}}',
+            extra       JSONB  DEFAULT '{{}}'::jsonb
         );
     """)
 
@@ -49,15 +51,19 @@ def insert_new_photo(conn, silo_id, metadata, table=DB_LEADER_TABLE_NAME):
         timestamp = datetime.strptime(timestamp, "%Y:%m:%d %H:%M:%S")
     cur.execute(
         f"""
-        INSERT INTO {table} (photo_id, silo_id, ts, lat, lon, tags, extra)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO {table}
+        (photo_id, silo_id, photo_name, ts, lat, lon, cam_make, cam_model, tags, extra)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             metadata.get('photo_id'),
             silo_id,
+            metadata.get('photo_name'),
             timestamp,
             metadata.get('latitude'),
             metadata.get('longitude'),
+            metadata.get('camera_make'),
+            metadata.get('camera_model'),
             None,
             None,
         )
@@ -122,7 +128,7 @@ def fetch_photos_by_metadata(conn, metadata, silo_ids, limit=1000,
     cur = conn.cursor()
 
     sql = f"""
-        SELECT photo_id, silo_id, ts, lat, lon, tags
+        SELECT photo_id, silo_id, photo_name, ts, lat, lon, cam_make, cam_model, tags
         FROM {table}
         WHERE (ts IS NULL OR ts >= %(start_ts)s AND ts <= %(end_ts)s)
             AND (lat IS NULL OR lat >= %(min_lat)s AND lat <= %(max_lat)s)
@@ -141,13 +147,16 @@ def fetch_photos_by_metadata(conn, metadata, silo_ids, limit=1000,
 
     # Convert to a list of dicts for easier grouping by silo later
     results = []
-    for photo_id, silo_id, ts, lat, lon, tags in rows:
+    for photo_id, silo_id, photo_name, ts, lat, lon, cam_make, cam_model, tags in rows:
         results.append({
             "photo_id": photo_id,
             "silo_id": silo_id,
+            "photo_name": photo_name,
             "ts": ts,
             "lat": lat,
             "lon": lon,
+            "cam_make": cam_make,
+            "cam_model": cam_model,
             "tags": tags,
         })
     return results
