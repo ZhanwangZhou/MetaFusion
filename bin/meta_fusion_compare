@@ -1,0 +1,91 @@
+#!/bin/bash
+#
+# meta_fusion_compare
+#
+# Start servers and search given prompt under 3 modes for comparison
+# Usage: bin/meta_fusion_compare <num_followers> <prompt> <optional_dir>
+
+
+# ------------------------------ ARGUMENT -------------------------------
+if [ -z "$1" ] || [ -z "$2"]; then
+    echo "Usage: $0 <num_followers> <prompt> <optional_dir>"
+    exit 1
+fi
+
+NUM_FOLLOWERS="$1"
+
+if ! [[ "$NUM_FOLLOWERS" =~ ^[0-9]+$ ]]; then
+    echo "Error: number of followers must be an integer"
+    exit 1
+fi
+
+# ------------------------------ CONFIG ---------------------------------
+
+# Commands to feed into LEADER
+INPUTS=(
+    "ls"
+    "ls"
+    "clear"
+    "mass_upload $3"
+    "search $2"
+    "search_metadata $2"
+    "search_vector $2"
+)
+if [ -z "$3" ]; then
+    INPUTS=(
+      "ls"
+      "ls"
+      "search $2"
+      "search_metadata $2"
+      "search_vector $2"
+    )
+fi
+
+DELAY=4 # seconds between commands
+
+LEADER_CMD="python main.py leader --host localhost --port 8000"
+FOLLOWER_BASE_PORT=9001   # follower ports: 9001, 9002, 9003...
+FOLLOWER_BASE_CMD="python main.py follower --host localhost --port"
+
+# -----------------------------------------------------------------------
+
+echo "[INFO] Starting leader with automated input..."
+
+(
+    for arg in "${INPUTS[@]}"; do
+        if [[ "${arg:0:11}" == "mass_upload" ]]; then
+            sleep 4
+        fi
+        sleep "$DELAY"
+        echo "$arg"
+    done
+) | $LEADER_CMD &
+LEADER_PID=$!
+
+echo "[INFO] Leader running with PID $LEADER_PID"
+
+echo "[INFO] Starting follower in background..."
+sleep 2
+for ((i=0; i<NUM_FOLLOWERS; i++)); do
+    port=$((FOLLOWER_BASE_PORT + i))
+    echo "[INFO] Starting follower #$((i+1)) on port $port"
+    $FOLLOWER_BASE_CMD "$port" > /dev/null 2>&1 &
+    FOLLOWER_PIDS+=("$!")
+done
+
+echo "[INFO] Follower started: ${FOLLOWER_PIDS[*]}"
+
+echo "[INFO] Waiting for leader to finish..."
+
+wait $LEADER_PID
+echo "[INFO] Leader exited."
+
+trap '
+    echo "[INFO] Cleaning up followers..."
+    for pid in "${FOLLOWER_PIDS[@]}"; do
+        kill "$pid" 2>/dev/null
+    done
+    echo "[INFO] Done."
+' EXIT
+
+echo "[INFO] Done."

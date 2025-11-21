@@ -1,0 +1,53 @@
+#!/bin/bash
+#
+# meta_fusion_run
+#
+# Start the leader node and given number of follower nodes
+# Usage: bin/meta_fusion_compare <num_followers>
+
+
+# ------------------------------ ARGUMENT -------------------------------
+if [ -z "$1" ]; then
+    echo "Usage: $0 <num_followers>"
+    exit 1
+fi
+
+NUM_FOLLOWERS="$1"
+
+if ! [[ "$NUM_FOLLOWERS" =~ ^[0-9]+$ ]]; then
+    echo "Error: number of followers must be an integer"
+    exit 1
+fi
+
+# ------------------------------ CONFIG ---------------------------------
+
+FOLLOWER_BASE_PORT=9001   # follower ports: 9001, 9002, 9003...
+FOLLOWER_BASE_CMD="python main.py follower --host localhost --port"
+
+# -----------------------------------------------------------------------
+
+for ((i=0; i<NUM_FOLLOWERS; i++)); do
+    port=$((FOLLOWER_BASE_PORT + i))
+    echo "[INFO] Starting follower #$((i+1)) on port $port"
+    (
+        sleep 2
+        $FOLLOWER_BASE_CMD "$port" > /dev/null 2>&1
+    ) &
+    FOLLOWER_PIDS+=("$!")
+done
+
+echo "[INFO] Follower started: ${FOLLOWER_PIDS[*]}"
+
+python main.py leader --host localhost --port 8000
+
+wait ${FOLLOWER_PIDS[*]}
+
+trap '
+    echo "[INFO] Cleaning up followers..."
+    for pid in "${FOLLOWER_PIDS[@]}"; do
+        kill "$pid" 2>/dev/null
+    done
+    echo "[INFO] Done."
+' EXIT
+
+echo "[INFO] Done."
