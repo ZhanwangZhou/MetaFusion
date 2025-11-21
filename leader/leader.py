@@ -1,4 +1,4 @@
-import os
+import sys
 import time
 import threading
 import base64
@@ -39,9 +39,6 @@ class Leader:
         self.tcp_listen_thread.start()
         self.conn = init_metadata_table()
         LOGGER.info('Leader initialized')
-        # self.tcp_listen_thread.join()
-        # self.udp_listen_thread.join()
-        # self.check_heartbeat_thread.join()
 
     def list_member(self):
         print('Leader: Host = %s, Port = %d' % (self.host, self.port))
@@ -83,46 +80,75 @@ class Leader:
         for photo_path in photo_paths:
             self.upload(photo_path)
 
-    def search(self, prompt, output_path=None, vector_search=True):
+    def search(self, prompt, output_path=None, search_mode='meta_fusion'):
+        """
+        Search/Get photos using given prompt under following modes:
+        - 'metadata_only': Search by only metadata psql.
+        - 'vector_only': Search by only vector index.
+        - 'meta_fusion': Search combining metadata psql and vector index.
+        """
+        start_time = time.time()
+        if len(self.followers) == 0:
+            print("No follower nodes available.")
+            return
         metadata = extract_prompt_meta(prompt)
         LOGGER.info('Extracted prompt meta data: %s', metadata)
 
-        # Filter silos by metadata
-        cand_silos = prefilter_candidate_silos(self.conn, metadata)
-        LOGGER.info("Candidate silos (silo_id, count): %s", cand_silos)
-        if not cand_silos:
-            print("No candidate silos from metadata; skip vector search.")
-            return
-        elif not vector_search:
-            # Query specific photo_ids
-            # TODO: follower subset filter / search without vector for experiment
-            silo_ids = [s for (s, _) in cand_silos]
-            candidates = fetch_photos_by_metadata(self.conn, metadata, silo_ids)
-            LOGGER.debug(f"Found {len(candidates)} candidate photos, sample: %s",
-                         candidates[:5])
-            return
-        silo_ids = {s for (s, _) in cand_silos}
+        if search_mode == 'vector_only':
+            # Skip pre-filtering for vector_only
+            silo_ids = {f['silo_id'] for f in self.followers}
+            cand_silos = [(f['silo_id'], VECTOR_SEARCH_TOP_K) for f in self.followers]
+            cand_photo_ids = set()
+        else:
+            # Common pre-filtering for metadata_only and meta_fusion
+            cand_silos = prefilter_candidate_silos(self.conn, metadata)
+            LOGGER.info("Candidate silos (silo_id, count): %s", cand_silos)
+            if not cand_silos:
+                print("No candidate silos from metadata; skip vector search.")
+                return
+            silo_ids = {s for (s, _) in cand_silos}
+            cand_photos = fetch_photos_by_metadata(self.conn, metadata, list(silo_ids))
+            cand_photo_ids = {p['photo_id'] for p in cand_photos}
+            # Immediately return results if metadata only search
+            if search_mode == 'metadata_only':
+                print(f'\n{"=" * 60}')
+                print(f'Search Mode: metadata_only')
+                print(f'Prompt: "{prompt}"')
+                print(f'Time spent: {time.time() - start_time: .4f} s')
+                print(f'Total Results: {len(cand_photos)}')
+                print(f'{"=" * 60}')
+                for i, photo in enumerate(cand_photos):
+                    print(f'{i + 1}. Filename = {photo["photo_name"]}')
+                print(f'{"=" * 60}')
+                return
+
+        # Initialize message and request info
+        LOGGER.info(f"Sending vector search to {len(cand_silos)} followers")
         request_id = f"search-{int(time.time() * 10000)}"
         self.pending_client_request[request_id] = {
             'prompt': prompt,
-            'recipients': silo_ids,
-            'last_check': time.time(),
-            'result': []
+            'recipients': silo_ids.copy(),
+            'first_check': start_time,
+            'cand_photo_ids': cand_photo_ids,
+            'result': [],
+            'search_mode': search_mode
         }
         message = {
             'message_type': 'search',
             'request_id': request_id,
             'text': prompt,
-            'top_k': VECTOR_SEARCH_TOP_K,
         }
         if output_path and os.path.isdir(output_path):
             message['message_type'] = 'get'
             message['output_path'] = output_path
+
+        # Send message to assigned followers
         for silo_id, num in cand_silos:
             message['top_k'] = max(num * 2, VECTOR_SEARCH_TOP_K)
             follower = self.followers[silo_id]
             if follower.get('status') != 'alive':
-                follower['pending_message'][request_id](message)
+                if 'pending_message' in follower:
+                    follower['pending_message'][request_id] = message
                 continue
             tcp_client(follower['host'], follower['port'], message)
 
@@ -132,6 +158,16 @@ class Leader:
         message = {'message_type': 'clear'}
         for follower in self.followers:
             tcp_client(follower['host'], follower['port'], message)
+
+    def quit(self):
+        message = {'message_type': 'quit'}
+        for follower in self.followers:
+            tcp_client(follower['host'], follower['port'], message)
+        self.signals['shutdown'] = True
+        self.tcp_listen_thread.join()
+        self.udp_listen_thread.join()
+        self.check_heartbeat_thread.join()
+        sys.exit(0)
 
     def _check_heartbeat(self):
         while not self.signals['shutdown']:
@@ -208,26 +244,44 @@ class Leader:
         """
         silo_id = message_dict.get('silo_id')
         request_id = message_dict.get('request_id')
-        results = message_dict.get('results', [])
+        partial_result = message_dict.get('results', [])
         request = self.pending_client_request.get(request_id)
         if not request:
             LOGGER.warning(f'Receiving unknown search result from follower{silo_id}')
             return
         request['recipients'].remove(silo_id)
-        request['result'] += results
+        request['result'] += partial_result
         if len(request['recipients']) > 0:
             return
-        print('Search results for prompt "{}":'.format(request['prompt']))
-        if not results:
+
+        # If received results from all assigned followers
+        search_mode = request.get('search_mode', 'unknown')
+        print(f'\n{"="*60}')
+        print(f'Search Mode: {search_mode.upper()}')
+        print(f'Prompt: "{request["prompt"]}"')
+        print(f'Time Spent: {time.time() - request.get("first_check"): .4f} s')
+        print(f'Total Results: {len(request["result"])}')
+        print(f'{"="*60}')
+
+        if not request['result']:
             print("(no results)")
-            return
-        for r in request['result']:
-            score = r.get('score')
-            photo_name = r.get('photo_name')
-            print(f'Filename = {photo_name}, Score = {score}')
-            if get_photo:
-                image_bytes = base64.b64decode(r['image_b64'])
-                output_path = os.path.join(message_dict['output_path'], photo_name)
-                save_image_bytes(image_bytes, output_path)
-                print(f'Saved to {output_path}')
+        else:
+            # Post filtering and print result photos
+            results = sorted(request['result'], key=lambda x: x.get('score', 0))
+            results = results[:int(len(results) * VECTOR_SCORE_FILTER_PORTION)]
+            i = 1
+            for r in results:
+                if search_mode == 'meta_fusion' and \
+                        r.get('photo_id') not in request.get('cand_photo_ids'):
+                    continue
+                score = r.get('score')
+                photo_name = r.get('photo_name')
+                print(f'{i}. Filename = {photo_name}, Score = {score: .4f}')
+                if get_photo:
+                    image_bytes = base64.b64decode(r['image_b64'])
+                    output_path = os.path.join(message_dict['output_path'], photo_name)
+                    save_image_bytes(image_bytes, output_path)
+                    print(f'   Saved to {output_path}')
+                i += 1
+        print(f'{"="*60}\n')
         self.pending_client_request.pop(request_id)

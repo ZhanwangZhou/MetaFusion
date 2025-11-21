@@ -1,7 +1,6 @@
 """TCP socket client."""
 import socket
 import json
-# import time
 
 
 def tcp_server(host, port, signals, handle_func):
@@ -26,7 +25,6 @@ def tcp_server(host, port, signals, handle_func):
                 clientsocket, address = sock.accept()  # NOT IN UDP!!
             except socket.timeout:
                 continue
-            print("DEBUG: Connection from", address[0])
 
             # Socket recv() will block for a maximum of 1 second.  If you omit
             # this, it blocks indefinitely, waiting for packets.
@@ -73,7 +71,6 @@ def udp_server(host, port, signals, handle_func):  # recv
         # No sock.listen() since UDP doesn't establish connections like TCP
         # Receive incoming UDP messages
         while not signals["shutdown"]:
-            # print(1)
             try:
                 message_bytes = sock.recv(4096)
             except socket.timeout:

@@ -58,22 +58,47 @@ def leader(
                     if not arg:
                         print("Usage: search <natural language prompt>")
                         continue
-                    leader_node.search(arg)
+                    leader_node.search(arg, search_mode='meta_fusion')
+                case 'search_metadata':
+                    if not arg:
+                        print("Usage: search_metadata <natural language prompt>")
+                        continue
+                    leader_node.search(arg, search_mode='metadata_only')
+                case 'search_vector':
+                    if not arg:
+                        print("Usage: search_vector <natural language prompt>")
+                        continue
+                    leader_node.search(arg, search_mode='vector_only')
                 case 'get':
                     parts = arg.split(maxsplit=1)
                     if len(parts) <= 1:
                         print('Usage: get <output directory> <natural language prompt>')
                         continue
-                    leader_node.search(parts[1], parts[0])
+                    leader_node.search(parts[1], parts[0], search_mode='meta_fusion')
+                case 'help':
+                    print("\n可用命令:")
+                    print("  ls                          - 列出所有follower节点")
+                    print("  upload <path>               - 上传单张图片")
+                    print("  mass_upload <dir>           - 批量上传图片目录")
+                    print("  clear                       - 清空所有数据")
+                    print("  search <prompt>             - MetaFusion搜索 (默认)")
+                    print("  search_metadata <prompt>    - 仅元数据搜索")
+                    print("  search_vector <prompt>      - 仅向量搜索")
+                    print("  compare <prompt>            - 比较三种搜索方法")
+                    print("  get <dir> <prompt>          - 搜索并下载图片")
+                    print("  help                        - 显示帮助信息")
+                    print("  exit/quit                   - 退出程序\n")
                 case 'exit' | 'quit':
                     print("Bye.")
+                    leader_node.quit()
                     break
 
                 case _:
-                    print(f"Unknown command: {cmd}")
+                    print(f"Unknown command: {cmd}. Type 'help' for available commands.")
 
         except (KeyboardInterrupt, EOFError):
             print("\nBye.")
+            leader_node.quit()
             break
         time.sleep(0.5)
 
