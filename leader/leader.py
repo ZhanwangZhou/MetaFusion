@@ -1,4 +1,4 @@
-import os
+import sys
 import time
 import threading
 import base64
@@ -39,9 +39,6 @@ class Leader:
         self.tcp_listen_thread.start()
         self.conn = init_metadata_table()
         LOGGER.info('Leader initialized')
-        # self.tcp_listen_thread.join()
-        # self.udp_listen_thread.join()
-        # self.check_heartbeat_thread.join()
 
     def list_member(self):
         print('Leader: Host = %s, Port = %d' % (self.host, self.port))
@@ -161,6 +158,16 @@ class Leader:
         message = {'message_type': 'clear'}
         for follower in self.followers:
             tcp_client(follower['host'], follower['port'], message)
+
+    def quit(self):
+        message = {'message_type': 'quit'}
+        for follower in self.followers:
+            tcp_client(follower['host'], follower['port'], message)
+        self.signals['shutdown'] = True
+        self.tcp_listen_thread.join()
+        self.udp_listen_thread.join()
+        self.check_heartbeat_thread.join()
+        sys.exit(0)
 
     def _check_heartbeat(self):
         while not self.signals['shutdown']:

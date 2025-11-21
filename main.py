@@ -90,6 +90,7 @@ def leader(
                     print("  exit/quit                   - 退出程序\n")
                 case 'exit' | 'quit':
                     print("Bye.")
+                    leader_node.quit()
                     break
 
                 case _:
@@ -97,6 +98,7 @@ def leader(
 
         except (KeyboardInterrupt, EOFError):
             print("\nBye.")
+            leader_node.quit()
             break
         time.sleep(0.5)
 

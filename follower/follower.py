@@ -1,3 +1,4 @@
+import sys
 import base64
 import threading
 import time
@@ -69,6 +70,8 @@ class Follower:
                 self._handle_upload(message_dict)
             case 'clear':
                 self._handle_clear()
+            case 'quit':
+                self._handle_quit()
 
     def _handle_register_ack(self, message_dict):
         self.silo_id = message_dict['silo_id']
@@ -189,3 +192,9 @@ class Follower:
                 except Exception as e:
                     LOGGER.warning(f'Failed to remove {filepath}', e)
         LOGGER.info("Cleared the vector index and all photos")
+
+    def _handle_quit(self):
+        self.signals['shutdown'] = True
+        self.heartbeat_thread.join()
+        LOGGER.info(f'Follower {self.silo_id} exits with 0')
+        sys.exit(0)
