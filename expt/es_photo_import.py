@@ -1,4 +1,3 @@
-import sys
 import numpy as np
 import requests
 from datetime import datetime
@@ -42,7 +41,7 @@ def import_from_dir(image_dir):
         if metadata['camera_model']:
             doc['cam_model'] = metadata['camera_model']
         requests.put(
-            f'{ES_URL}/{photo_id}',
+            f'{ES_URL}/_doc/{photo_id}',
             auth=(ES_USERNAME, ES_PASSWORD),
             json=doc,
             verify=CERT_PATH,
