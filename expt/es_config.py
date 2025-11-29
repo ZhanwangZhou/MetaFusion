@@ -17,4 +17,4 @@ except FileNotFoundError:
 except Exception as e:
     print(e)
 
-CERT_PATH = "/Users/zhouzhanwang/Downloads/elasticsearch-9.2.1/config/certs/http_ca.crt"
+CERT_PATH = "./elasticsearch-9.2.1/config/certs/http_ca.crt"
