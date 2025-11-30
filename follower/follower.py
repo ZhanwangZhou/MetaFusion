@@ -68,6 +68,8 @@ class Follower:
                 self._handle_search(message_dict, get_photo=True)
             case 'upload':
                 self._handle_upload(message_dict)
+            case 'upload_from_json':
+                self._handle_upload_from_json(message_dict)
             case 'clear':
                 self._handle_clear()
             case 'quit':
@@ -174,6 +176,36 @@ class Follower:
 
         metadata = extract_photo_metadata(saved_image_path)
         metadata = metadata | insert_data
+        message = {
+            'message_type': 'upload_reply',
+            'silo_id': self.silo_id,
+            'metadata': metadata
+        }
+        tcp_client(self.leader_host, self.leader_port, message)
+
+    def _handle_upload_from_json(self, message_dict):
+        metadata = message_dict['metadata']
+        photo_id = metadata['photo_id']
+        photo_name = metadata['photo_name']
+        image_b64 = message_dict['image_b64']
+        image_bytes = base64.b64decode(image_b64)
+        saved_image_path = os.path.join(self.photos_dir, f'{photo_name}')
+        save_image_bytes(image_bytes, saved_image_path)
+        LOGGER.info(f'Saved uploaded image {photo_name} to {saved_image_path}')
+        vector = self.model.encode(saved_image_path)
+        vector_id = self.faiss_index.add(vector)
+        self.faiss_index.save()
+
+        insert_data = {
+            'vector_id': vector_id,
+            'photo_id': photo_id,
+            'photo_name': photo_name,
+            'photo_format': 'jpg',
+            'saved_path': saved_image_path,
+        }
+        insert_new_photo_vector(self.conn, insert_data, table=self.psql_table_name)
+        LOGGER.info('Added uploaded image %s to local vector index as vector_id=%d',
+                    photo_name, vector_id, )
         message = {
             'message_type': 'upload_reply',
             'silo_id': self.silo_id,

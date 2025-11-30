@@ -1,7 +1,10 @@
 import sys
 import time
+import random
 import threading
 import base64
+import msgpack
+from datetime import timedelta
 from typing import List, Dict, Optional, Any
 from leader.storage.store import *
 from utils.config import *
@@ -46,6 +49,10 @@ class Leader:
             print('Follower: ID = %d, Host = %s, Port = %d, Status = %s'
                   % (i, follower['host'], follower['port'], follower['status']))
 
+    def list_num_photo(self):
+        num = query_photo_num(self.conn)[0]
+        print(f'Num of photos stored: {num}')
+
     def upload(self, image_path):
         if len(self.followers) == 0:
             print('No follower nodes are assigned to the leader')
@@ -77,8 +84,63 @@ class Leader:
 
     def mass_upload(self, image_dir):
         photo_paths = list_photo_paths(image_dir)
-        for photo_path in photo_paths:
+        for i, photo_path in enumerate(photo_paths):
             self.upload(photo_path)
+            if i % 50 == 0:
+                time.sleep(1)
+
+    def upload_from_json(self, record):
+        if len(self.followers) == 0:
+            print('No follower nodes are assigned to the leader')
+            return
+        try:
+            image_bytes = record['image']
+            photo_name = record['id'].replace('/', '+')
+            latitude = record['latitude']
+            longitude = record['longitude']
+        except KeyError:
+            return
+        photo_id = hash_image_bytes(image_bytes)
+        if query_by_photo_id(self.conn, photo_id):
+            print(photo_name, 'has already been stored')
+            return
+        if 'timestamp' in record:
+            timestamp = record['timestamp']
+        else:
+            start = datetime(2010, 1, 1)
+            end = datetime(2024, 12, 31)
+            delta = end - start
+            rand_sec = random.randint(0, int(delta.total_seconds()))
+            timestamp = start + timedelta(seconds=rand_sec)
+        metadata = {
+            'photo_id': photo_id,
+            'photo_name': photo_name,
+            'timestamp': timestamp.strftime('%Y:%m:%d %H:%M:%S'),
+            'latitude': latitude,
+            'longitude': longitude,
+            'camera_make': None,
+            'camera_model': None
+        }
+        digest = hashlib.sha256(photo_id.encode("utf-8")).hexdigest()
+        index = int(digest, 16) % len(self.followers)
+        image_b64 = base64.b64encode(image_bytes).decode("ascii")
+        message = {
+            'message_type': 'upload_from_json',
+            'image_b64': image_b64,
+            'metadata': metadata
+        }
+        tcp_client(self.followers[index]['host'],
+                   self.followers[index]['port'],
+                   message)
+
+    def upload_from_msgpack(self, file_path):
+        with open(file_path, "rb") as f:
+            unpacker = msgpack.Unpacker(f, raw=False)
+            for i, record in enumerate(unpacker):
+                self.upload_from_json(record)
+                if i % 50 == 0:
+                    print(f'Inserting {i}/N photos...')
+                    time.sleep(1)
 
     def search(self, prompt, output_path=None, search_mode='meta_fusion'):
         """
@@ -87,7 +149,7 @@ class Leader:
         - 'vector_only': Search by only vector index.
         - 'meta_fusion': Search combining metadata psql and vector index.
         """
-        start_time = time.time()
+        start_time = time.perf_counter()
         if len(self.followers) == 0:
             print("No follower nodes available.")
             return
@@ -112,7 +174,7 @@ class Leader:
             # Immediately return results if metadata only search
             if search_mode == 'metadata_only':
                 print(f'\n{"=" * 60}')
-                print(f'Search Mode: metadata_only')
+                print(f'Search Mode: METADATA_ONLY')
                 print(f'Prompt: "{prompt}"')
                 print(f'Time spent: {time.time() - start_time: .4f} s')
                 print(f'Total Results: {len(cand_photos)}')
@@ -128,7 +190,7 @@ class Leader:
         self.pending_client_request[request_id] = {
             'prompt': prompt,
             'recipients': silo_ids.copy(),
-            'first_check': start_time,
+            'first_check': time.perf_counter(),  # TODO: change to start_time after experiment
             'cand_photo_ids': cand_photo_ids,
             'result': [],
             'search_mode': search_mode
@@ -255,11 +317,12 @@ class Leader:
             return
 
         # If received results from all assigned followers
+        end_time = time.perf_counter()
         search_mode = request.get('search_mode', 'unknown')
         print(f'\n{"="*60}')
         print(f'Search Mode: {search_mode.upper()}')
         print(f'Prompt: "{request["prompt"]}"')
-        print(f'Time Spent: {time.time() - request.get("first_check"): .4f} s')
+        print(f'Time Spent: {end_time - request.get("first_check"): .4f} s')
         print(f'Total Results: {len(request["result"])}')
         print(f'{"="*60}')
 
