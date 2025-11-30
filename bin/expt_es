@@ -1,0 +1,74 @@
+#!/bin/bash
+
+if [ -z "$1" ]; then
+    echo "Usage: $0 <operation>"
+    exit 1
+fi
+
+if [[ -f "expt/es_auth.txt" ]]; then
+    USERNAME=$(awk 'NR==1 { print }' expt/es_auth.txt)
+    PASSWORD=$(awk 'NR==2 { print }' expt/es_auth.txt)
+else
+    echo "expt/es_auth.txt does not exist."
+    echo "Create the file with username in 1st line and password in 2nd line."
+    exit 1
+fi
+
+case $1 in
+    "create")
+        curl -k -X PUT "https://localhost:9200/photos" \
+            -u "$USERNAME:$PASSWORD" \
+            -H "Content-Type: application/json" \
+            -d '{
+                "mappings": {
+                    "properties": {
+                        "photo_id":      { "type": "keyword" },
+                        "path":          { "type": "keyword" },
+                        "photo_name":    { "type": "keyword" },
+                        "timestamp":     { "type": "date" },
+                        "location":      { "type": "geo_point" },
+                        "cam_make":      { "type": "keyword" },
+                        "cam_model":     { "type": "keyword" },
+                        "tags":          { "type": "keyword" },
+                            "embedding": {
+                                "type": "dense_vector",
+                                "dims": 512,
+                                "index": true,
+                                "similarity": "cosine"
+                            }
+                  }
+                }
+            }'
+        ;;
+    "overview")
+        curl -k -u "$USERNAME:$PASSWORD" "https://localhost:9200/_cat/indices?v"
+        curl -k -u "$USERNAME:$PASSWORD" "https://localhost:9200/photos/_count?pretty"
+        curl -k -u "$USERNAME:$PASSWORD" "https://localhost:9200/photos/_search?pretty"
+        ;;
+    "import")
+        if [ -z "$1" ] || [ -z "$2"]; then
+            echo "Usage: $0 import <import_photo_directory>"
+            exit 1
+        fi
+        python -m expt.es_photo_import $2
+        ;;
+    "search")
+        if [ -z "$1" ] || [ -z "$2" ]; then
+            echo "Usage: $0 search <prompt> <top_k> <num_candidates>"
+            exit 1
+        fi
+        TOP_K="10"
+        NUM_CANDIDATES="100"
+        if [ ! -z "$3" ]; then
+            TOP_K=$3
+        fi
+        if [ ! -z "$4" ]; then
+            NUM_CANDIDATES=$4
+        fi
+        python -m expt.es_photo_search "$2" "$TOP_K" "$NUM_CANDIDATES"
+        ;;
+    "clear")
+        curl -k -u "$USERNAME:$PASSWORD" \
+            -X DELETE "https://localhost:9200/photos"
+        ;;
+esac

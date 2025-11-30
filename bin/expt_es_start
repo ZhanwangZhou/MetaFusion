@@ -1,0 +1,52 @@
+#!/bin/bash
+#
+# expt_es_start
+#
+# Start given number of ElasticSearch nodes
+# Usage: bin/expt_es_start <node_num>
+
+set -euo pipefail
+
+NUM_NODES=${1:-2}
+CLUSTER_NAME="metafusion-cluster"
+ES_HOME="./elasticsearch-9.2.1" # change this to ES root dir
+DATA_ROOT="./expt/test_es/data"
+LOG_ROOT="./expt/test_es/logs"
+
+mkdir -p "$DATA_ROOT" "$LOG_ROOT"
+
+for i in $(seq 1 "$NUM_NODES"); do
+  NODE_NAME="node${i}"
+  HTTP_PORT=$((9200 + i - 1))
+  TRANSPORT_PORT=$((9300 + i - 1))
+  DATA_DIR="${DATA_ROOT}/${NODE_NAME}"
+  LOG_FILE="${LOG_ROOT}/${NODE_NAME}.log"
+
+  mkdir -p "$DATA_DIR"
+
+  BOOTSTRAP_OPTS=""
+  if [[ $i -eq 1 && ! -d "${DATA_DIR}/nodes" ]]; then
+    echo "[INFO] Bootstrapping cluster with ${NODE_NAME} as initial master"
+    BOOTSTRAP_OPTS="-E cluster.initial_master_nodes=${NODE_NAME}"
+  fi
+
+  echo "[INFO] Starting ${NODE_NAME} (HTTP ${HTTP_PORT}, transport ${TRANSPORT_PORT})"
+
+  "${ES_HOME}/bin/elasticsearch" \
+    -E node.name="${NODE_NAME}" \
+    -E cluster.name="${CLUSTER_NAME}" \
+    -E path.data="${DATA_DIR}" \
+    -E http.port="${HTTP_PORT}" \
+    -E transport.port="${TRANSPORT_PORT}" \
+    -E discovery.seed_hosts="127.0.0.1:9300,127.0.0.1:9301,127.0.0.1:9302" \
+    ${BOOTSTRAP_OPTS} \
+    > "${LOG_FILE}" 2>&1 &
+
+done
+
+echo "[INFO] Started ${NUM_NODES} nodes. Logs in ${LOG_ROOT}/node*.log"
+
+
+
+
+

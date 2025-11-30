@@ -1,0 +1,10 @@
+#!/bin/bash
+#
+# expt_es_kill
+#
+# Kill ElasticSearch nodes
+
+set -euo pipefail
+
+echo "[INFO] Stopping all Elasticsearch nodes for this user"
+pkill -f 'org.elasticsearch.bootstrap.Elasticsearch' || echo "[INFO] No ES processes found"
