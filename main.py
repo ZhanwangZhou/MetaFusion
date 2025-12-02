@@ -62,6 +62,11 @@ def leader(
                         print("Usage: search <natural language prompt>")
                         continue
                     leader_node.search(arg, search_mode='meta_fusion')
+                case 'mass_search':
+                    if not arg:
+                        print("Usage: mass_search <prompt file>")
+                        continue
+                    leader_node.mass_search(arg)
                 case 'search_metadata':
                     if not arg:
                         print("Usage: search_metadata <natural language prompt>")

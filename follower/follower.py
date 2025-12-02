@@ -2,15 +2,14 @@ import sys
 import base64
 import threading
 import time
-from typing import Optional, Any
-
+import numpy as np
 import psycopg2.extensions
-
+from typing import Optional
 from follower.storage.store import *
-from follower.storage.photo_to_vector import ImageEmbeddingModel
 from follower.storage.vertex_index import FollowerFaissIndex
 from utils.config import *
 from utils.image_utils import *
+from utils.photo_to_vector import ImageEmbeddingModel
 from utils.network import tcp_server
 from utils.network import tcp_client
 from utils.network import udp_client
@@ -109,7 +108,7 @@ class Follower:
             return
 
         prompt = message_dict.get('text', '')
-        query_vec = self.model.encode_text(prompt)
+        query_vec = np.asarray(message_dict["query_vec"], dtype="float32")
         distances, indices = self.faiss_index.search(query_vec, message_dict['top_k'])
 
         results = []
