@@ -18,3 +18,5 @@ except Exception as e:
     print(e)
 
 CERT_PATH = "./elasticsearch-9.2.1/config/certs/http_ca.crt"
+
+VECTOR_SEARCH_TOP_K = 60

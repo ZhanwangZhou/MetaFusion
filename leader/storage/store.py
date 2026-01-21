@@ -88,6 +88,16 @@ def query_by_photo_id(conn, photo_id, table=DB_LEADER_TABLE_NAME):
     return rows
 
 
+def query_photo_num(conn, table=DB_LEADER_TABLE_NAME):
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT COUNT(DISTINCT photo_id) FROM {table}
+    """)
+    row = cur.fetchone()
+    cur.close()
+    return row
+
+
 def prefilter_candidate_silos(conn, metadata, limit=None, table=DB_LEADER_TABLE_NAME):
     """
     Prefilter silos based on metadata, returning matching counts per silo:

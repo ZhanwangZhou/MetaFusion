@@ -4,6 +4,7 @@ import clip
 import numpy as np
 import torch
 from PIL import Image
+from io import BytesIO
 
 
 class ImageEmbeddingModel:
@@ -34,15 +35,21 @@ class ImageEmbeddingModel:
         model, preprocess = clip.load(self.model_name, device=self.device)
         return model, preprocess
 
-    def encode(self, image_path: str) -> np.ndarray:
+    def encode(self, image_path: str = "", image_bytes: bytes = None) -> np.ndarray:
         """
         Convert an image file into a single embedding vector.
 
         Returns:
             np.ndarray of shape (D,), dtype float32
         """
-        with Image.open(image_path) as image:
+        if image_path:
+            with Image.open(image_path) as image:
+                image_tensor = self.preprocess(image).unsqueeze(0).to(self.device)
+        elif image_bytes:
+            image = Image.open(BytesIO(image_bytes)).convert("RGB")
             image_tensor = self.preprocess(image).unsqueeze(0).to(self.device)
+        else:
+            raise ValueError
         with torch.no_grad():
             embedding = self.model.encode_image(image_tensor)
         if self.normalize:

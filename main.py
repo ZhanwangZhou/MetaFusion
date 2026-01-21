@@ -41,8 +41,9 @@ def leader(
 
             match cmd:
                 case 'ls':
-                    # assume leader_node has list_member() to show the follower list
                     leader_node.list_member()
+                case 'ls_num_photo':
+                    leader_node.list_num_photo()
                 case 'upload':
                     if not arg:
                         print('Usage: upload <image path>')
@@ -52,6 +53,8 @@ def leader(
                     if not arg:
                         print('Usage: upload <image directory>')
                     leader_node.mass_upload(arg)
+                case 'upload_from_msgpack':
+                    leader_node.upload_from_msgpack(arg)
                 case 'clear':
                     leader_node.clear()
                 case 'search':
@@ -59,6 +62,11 @@ def leader(
                         print("Usage: search <natural language prompt>")
                         continue
                     leader_node.search(arg, search_mode='meta_fusion')
+                case 'mass_search':
+                    if not arg:
+                        print("Usage: mass_search <prompt file>")
+                        continue
+                    leader_node.mass_search(arg)
                 case 'search_metadata':
                     if not arg:
                         print("Usage: search_metadata <natural language prompt>")

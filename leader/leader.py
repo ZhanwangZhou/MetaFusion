@@ -1,12 +1,16 @@
 import sys
 import time
+import random
 import threading
 import base64
+import msgpack
+from datetime import timedelta
 from typing import List, Dict, Optional, Any
 from leader.storage.store import *
 from utils.config import *
 from utils.image_utils import *
 from utils.prompt_metadata import extract_prompt_meta
+from utils.photo_to_vector import ImageEmbeddingModel
 from utils.network import tcp_server
 from utils.network import tcp_client
 from utils.network import udp_server
@@ -19,6 +23,9 @@ class Leader:
         self.signals = {'shutdown': False}
         self.followers: List[Dict[str, Optional[Any]]] = []
         self.pending_client_request: Dict[str, Dict[str, Optional[Any]]] = {}
+        self.model = ImageEmbeddingModel(model_name=model_name,
+                                         device=device,
+                                         normalize=normalize)
 
         # Unified follower index/model parameters
         self.base_dir = base_dir
@@ -45,6 +52,10 @@ class Leader:
         for i, follower in enumerate(self.followers):
             print('Follower: ID = %d, Host = %s, Port = %d, Status = %s'
                   % (i, follower['host'], follower['port'], follower['status']))
+
+    def list_num_photo(self):
+        num = query_photo_num(self.conn)[0]
+        print(f'Num of photos stored: {num}')
 
     def upload(self, image_path):
         if len(self.followers) == 0:
@@ -77,8 +88,63 @@ class Leader:
 
     def mass_upload(self, image_dir):
         photo_paths = list_photo_paths(image_dir)
-        for photo_path in photo_paths:
+        for i, photo_path in enumerate(photo_paths):
             self.upload(photo_path)
+            if i % 50 == 0:
+                time.sleep(1)
+
+    def upload_from_json(self, record):
+        if len(self.followers) == 0:
+            print('No follower nodes are assigned to the leader')
+            return
+        try:
+            image_bytes = record['image']
+            photo_name = record['id'].replace('/', '+')
+            latitude = record['latitude']
+            longitude = record['longitude']
+        except KeyError:
+            return
+        photo_id = hash_image_bytes(image_bytes)
+        if query_by_photo_id(self.conn, photo_id):
+            print(photo_name, 'has already been stored')
+            return
+        if 'timestamp' in record:
+            timestamp = record['timestamp']
+        else:
+            start = datetime(2010, 1, 1)
+            end = datetime(2024, 12, 31)
+            delta = end - start
+            rand_sec = random.randint(0, int(delta.total_seconds()))
+            timestamp = start + timedelta(seconds=rand_sec)
+        metadata = {
+            'photo_id': photo_id,
+            'photo_name': photo_name,
+            'timestamp': timestamp.strftime('%Y:%m:%d %H:%M:%S'),
+            'latitude': latitude,
+            'longitude': longitude,
+            'camera_make': None,
+            'camera_model': None
+        }
+        digest = hashlib.sha256(photo_id.encode("utf-8")).hexdigest()
+        index = int(digest, 16) % len(self.followers)
+        image_b64 = base64.b64encode(image_bytes).decode("ascii")
+        message = {
+            'message_type': 'upload_from_json',
+            'image_b64': image_b64,
+            'metadata': metadata
+        }
+        tcp_client(self.followers[index]['host'],
+                   self.followers[index]['port'],
+                   message)
+
+    def upload_from_msgpack(self, file_path):
+        with open(file_path, "rb") as f:
+            unpacker = msgpack.Unpacker(f, raw=False)
+            for i, record in enumerate(unpacker):
+                self.upload_from_json(record)
+                if i % 50 == 0:
+                    print(f'Inserting {i}/N photos...')
+                    time.sleep(0.5)
 
     def search(self, prompt, output_path=None, search_mode='meta_fusion'):
         """
@@ -87,10 +153,10 @@ class Leader:
         - 'vector_only': Search by only vector index.
         - 'meta_fusion': Search combining metadata psql and vector index.
         """
-        start_time = time.time()
         if len(self.followers) == 0:
             print("No follower nodes available.")
             return
+        time_check1 = time.perf_counter()
         metadata = extract_prompt_meta(prompt)
         LOGGER.info('Extracted prompt meta data: %s', metadata)
 
@@ -112,15 +178,17 @@ class Leader:
             # Immediately return results if metadata only search
             if search_mode == 'metadata_only':
                 print(f'\n{"=" * 60}')
-                print(f'Search Mode: metadata_only')
+                print(f'Search Mode: METADATA_ONLY')
                 print(f'Prompt: "{prompt}"')
-                print(f'Time spent: {time.time() - start_time: .4f} s')
+                print(f'Time spent: {time.perf_counter() - time_check1: .4f} s')
                 print(f'Total Results: {len(cand_photos)}')
                 print(f'{"=" * 60}')
                 for i, photo in enumerate(cand_photos):
                     print(f'{i + 1}. Filename = {photo["photo_name"]}')
                 print(f'{"=" * 60}')
                 return
+        time_check2 = time.perf_counter()
+        query_vec = self.model.encode_text(prompt)
 
         # Initialize message and request info
         LOGGER.info(f"Sending vector search to {len(cand_silos)} followers")
@@ -128,7 +196,9 @@ class Leader:
         self.pending_client_request[request_id] = {
             'prompt': prompt,
             'recipients': silo_ids.copy(),
-            'first_check': start_time,
+            'first_check': time_check1,
+            'second_check': time_check2,
+            'third_check': time.perf_counter(),
             'cand_photo_ids': cand_photo_ids,
             'result': [],
             'search_mode': search_mode
@@ -137,6 +207,7 @@ class Leader:
             'message_type': 'search',
             'request_id': request_id,
             'text': prompt,
+            'query_vec': query_vec.tolist()
         }
         if output_path and os.path.isdir(output_path):
             message['message_type'] = 'get'
@@ -151,6 +222,26 @@ class Leader:
                     follower['pending_message'][request_id] = message
                 continue
             tcp_client(follower['host'], follower['port'], message)
+
+    def mass_search(self, prompt_file_path):
+        prompts = []
+        try:
+            with open(prompt_file_path, 'r') as file:
+                lines = file.readlines()
+                for line in lines:
+                    prompts.append(line.strip())
+        except FileNotFoundError:
+            print(f"Error: The file '{prompt_file_path}' was not found.")
+        self.pending_client_request['mass_search'] = {
+            'num_prompt': len(prompts),
+            'num_received': 0,
+            'extract_time': 0,
+            'vector_time': 0,
+            'query_time': 0
+        }
+        for prompt in prompts:
+            self.search(prompt)
+            time.sleep(0.5)
 
     def clear(self):
         clear_all_photos(self.conn)
@@ -255,25 +346,48 @@ class Leader:
             return
 
         # If received results from all assigned followers
+        time_check4 = time.perf_counter()
+        if 'mass_search' in self.pending_client_request:
+            mass_request = self.pending_client_request['mass_search']
+            mass_request['num_received'] += 1
+            mass_request['extract_time'] += (request.get("second_check") -
+                                             request.get("first_check"))
+            mass_request['vector_time'] += (request.get("third_check") -
+                                            request.get("second_check"))
+            mass_request['query_time'] += time_check4 - request.get('third_check')
+            if mass_request['num_received'] < mass_request['num_prompt']:
+                return
+            print(f'\n{"=" * 60}')
+            print(f'Search Mode: MASS_META_FUSION')
+            print(f'Prompt: {mass_request["num_prompt"]}')
+            print(f'Time of prompt metadata extraction: '
+                  f'{mass_request["extract_time"]: .4f} s')
+            print(f'Time of prompt vectorization: {mass_request["vector_time"]: .4f} s')
+            print(f'Time of query: {mass_request["query_time"]: .4f} s')
+            print(f'\n{"=" * 60}')
+            self.pending_client_request.pop('mass_search')
+            return
         search_mode = request.get('search_mode', 'unknown')
         print(f'\n{"="*60}')
         print(f'Search Mode: {search_mode.upper()}')
         print(f'Prompt: "{request["prompt"]}"')
-        print(f'Time Spent: {time.time() - request.get("first_check"): .4f} s')
-        print(f'Total Results: {len(request["result"])}')
-        print(f'{"="*60}')
+        print(f'Time Spent: {time_check4 - request.get("second_check"): .4f} s')
 
+        # Post filtering and print result photos
+        results = request['result']
+        results = sorted(results, key=lambda x: x.get('score', 0))
+        results = results[:int(len(results) * VECTOR_SCORE_FILTER_PORTION)]
+        if search_mode == 'meta_fusion':
+            results = [
+                r for r in results if r.get('photo_id') in request.get('cand_photo_ids')
+            ]
+        print(f'Total Results: {len(results)}')
+        print(f'{"="*60}')
         if not request['result']:
             print("(no results)")
         else:
-            # Post filtering and print result photos
-            results = sorted(request['result'], key=lambda x: x.get('score', 0))
-            results = results[:int(len(results) * VECTOR_SCORE_FILTER_PORTION)]
             i = 1
             for r in results:
-                if search_mode == 'meta_fusion' and \
-                        r.get('photo_id') not in request.get('cand_photo_ids'):
-                    continue
                 score = r.get('score')
                 photo_name = r.get('photo_name')
                 print(f'{i}. Filename = {photo_name}, Score = {score: .4f}')
