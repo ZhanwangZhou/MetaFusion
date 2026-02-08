@@ -20,7 +20,7 @@ def _get_geolocator() -> Nominatim:
 
 
 @lru_cache(maxsize=256)
-def geocode_location(name: str) -> Tuple[Optional[float], Optional[float]]:
+def geocode_location(name: str) -> Tuple[Optional[float], Optional[float], Tuple[Optional[float]]]:
     """
         Convert a place name (e.g., "Yosemite") to (lat, lon).
 
@@ -28,14 +28,18 @@ def geocode_location(name: str) -> Tuple[Optional[float], Optional[float]]:
             (lat, lon) or (None, None) if not found.
     """
     if not name:
-        return None, None
+        return None, None, (None,)
 
     geolocator = _get_geolocator()
-    loc = geolocator.geocode(name)
+    loc = geolocator.geocode(name, addressdetails=True)
     if not loc:
-        return None, None
+        return None, None, (None,)
+    raw_data = loc.raw
+    # loc_type = raw_data.get('addresstype') or raw_data.get('type')
+    bbox = tuple(raw_data.get('boundingbox'))
+    bbox = tuple(float(b) or None for b in bbox)
 
-    return float(loc.latitude), float(loc.longitude)
+    return float(loc.latitude), float(loc.longitude), bbox
 
 
 def geocode_bbox(name: str, radius_km: float = 50.0) -> Optional[Tuple[float, float, float, float]]:
@@ -50,7 +54,7 @@ def geocode_bbox(name: str, radius_km: float = 50.0) -> Optional[Tuple[float, fl
         Returns:
             (min_lat, max_lat, min_lon, max_lon) or None
     """
-    lat, lon = geocode_location(name)
+    lat, lon, _ = geocode_location(name)
     if lat is None or lon is None:
         return None
 
