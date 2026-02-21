@@ -69,6 +69,8 @@ class Follower:
                 self._handle_upload(message_dict)
             case 'upload_from_json':
                 self._handle_upload_from_json(message_dict)
+            case 'upload_from_sqlite':
+                self._handle_upload_from_sqlite(message_dict)
             case 'clear':
                 self._handle_clear()
             case 'quit':
@@ -209,6 +211,32 @@ class Follower:
             'message_type': 'upload_reply',
             'silo_id': self.silo_id,
             'metadata': metadata
+        }
+        tcp_client(self.leader_host, self.leader_port, message)
+
+    def _handle_upload_from_sqlite(self, message_dict):
+        request_id = message_dict['request_id']
+        photo_id = message_dict['photo_id']
+        photo_format = message_dict['photo_format']
+        saved_path = message_dict['saved_path']
+        vector = self.model.encode(saved_path)
+        vector_id = self.faiss_index.add(vector)
+        self.faiss_index.save()
+        insert_data = {
+            'vector_id': vector_id,
+            'photo_id': photo_id,
+            'photo_name': str(photo_id),
+            'photo_format': photo_format,
+            'saved_path': saved_path,
+        }
+        insert_new_photo_vector(self.conn, insert_data, table=self.psql_table_name)
+        LOGGER.info('Added uploaded image %d.%s to local vector index as vector_id=%d',
+                    photo_id, photo_format, vector_id, )
+        message = {
+            'message_type': 'upload_from_sqlite_reply',
+            'request_id': request_id,
+            'silo_id': self.silo_id,
+            'photo_id': photo_id
         }
         tcp_client(self.leader_host, self.leader_port, message)
 

@@ -4,6 +4,7 @@ import random
 import threading
 import base64
 import msgpack
+import sqlite3
 from datetime import timedelta
 from typing import List, Dict, Optional, Any
 from leader.storage.store import *
@@ -146,6 +147,60 @@ class Leader:
                     print(f'Inserting {i}/N photos...')
                     time.sleep(0.5)
 
+    def upload_from_sqlite(self, db_path=ADAPTIVE_DB_PATH, photo_table=ADAPTIVE_PHOTO_TABLE):
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        request_id = f"search-{int(time.time() * 10000)}"
+        self.pending_client_request[request_id] = {'pending_uploads': {}}
+        pending_uploads = self.pending_client_request[request_id]['pending_uploads']
+
+        last_id = 0
+        num_uploaded = 0
+        while True:
+            if len(pending_uploads):
+                time.sleep(0.1)
+            num_uploaded += 100
+            LOGGER.info(f"Uploaded {num_uploaded} photos from sqlite")
+
+            rows = cur.execute(f"""
+                SELECT photoid, ext, lat, lon, datetaken, saved_path
+                FROM {photo_table}
+                WHERE photoid > ?
+                ORDER BY photoid
+                LIMIT 100
+            """, (last_id,)).fetchall()
+            if not rows:
+                break
+            last_id = rows[-1][0]
+
+            for row in rows:
+                photoid, ext, lat, lon, datetaken, saved_path = row
+                if datetaken:
+                    timestamp = datetime.strptime(datetaken, "%Y-%m-%d %H:%M:%S.%f")
+                else:
+                    timestamp = None
+                metadata = {
+                    'photo_id': photoid,
+                    'photo_name': str(photoid),
+                    'timestamp': timestamp.strftime('%Y:%m:%d %H:%M:%S'),
+                    'latitude': lat,
+                    'longitude': lon,
+                    'camera_make': None,
+                    'camera_model': None,
+                }
+                pending_uploads[photoid] = metadata
+                index = photoid % len(self.followers)
+                message = {
+                    'message_type': 'upload_from_sqlite',
+                    'request_id': request_id,
+                    'photo_id': photoid,
+                    'photo_format': ext,
+                    'saved_path': saved_path
+                }
+                tcp_client(self.followers[index]['host'],
+                           self.followers[index]['port'],
+                           message)
+
     def search(self, prompt, output_path=None, search_mode='meta_fusion'):
         """
         Search/Get photos using given prompt under following modes:
@@ -280,6 +335,8 @@ class Leader:
                 self._handle_register(message_dict)
             case 'upload_reply':
                 self._handle_upload_reply(message_dict)
+            case 'upload_from_sqlite_reply':
+                self._handle_upload_from_sqlite_reply(message_dict)
             case 'search_result':
                 self._handle_search_result(message_dict)
             case 'get_result':
@@ -328,6 +385,19 @@ class Leader:
         insert_new_photo(self.conn, silo_id, metadata)
         LOGGER.info(f'Inserted photo {metadata["photo_name"]} into metadata database.'
                     f'Assigned to follower {silo_id}')
+
+    def _handle_upload_from_sqlite_reply(self, message_dict):
+        request_id = message_dict['request_id']
+        silo_id = message_dict['silo_id']
+        photo_id = message_dict['photo_id']
+        pending_uploads = self.pending_client_request[request_id]['pending_uploads']
+        if photo_id and photo_id in pending_uploads:
+            metadata = pending_uploads.pop(photo_id)
+            insert_new_photo(self.conn, silo_id, metadata)
+            LOGGER.debug(f'Inserted photo {metadata["photo_name"]} into metadata database.'
+                         f'Assigned to follower {silo_id}')
+        if len(pending_uploads) == 0:
+            self.pending_client_request.pop(request_id)
 
     def _handle_search_result(self, message_dict, get_photo=False):
         """
