@@ -1,4 +1,4 @@
-# utils/extract_and_score_time.py
+# utils/extract_prompt_time.py
 import re
 import math
 import calendar
@@ -65,19 +65,6 @@ def extract_time_range(prompt: str, now: Optional[datetime] = None) -> Tuple[Opt
     # 3) Infer granularity from the matched text
     text = texts[0]
     dt = dts[0]
-    print(dt, texts)
-
-    m = _YEAR_ONLY.match(text)
-    if m:
-        return _year_bounds(int(m.group(1)))
-
-    m = _YEAR_MONTH_NUM.match(text)
-    if m:
-        return _month_bounds(int(m.group(1)), int(m.group(2)))
-
-    m = _QUARTER.match(text)
-    if m:
-        return _quarter_bounds(int(m.group(1)), int(m.group(2)))
 
     if _WEEK_WORD.search(text):
         return _week_bounds(dt, week_starts_monday=True)
@@ -93,6 +80,18 @@ def extract_time_range(prompt: str, now: Optional[datetime] = None) -> Tuple[Opt
     if _MONTH_WORD.search(text) and re.search(r"\b\d{4}\b", text):
         # likely "June 2025" style; dateparser already parsed dt correctly
         return _month_bounds(dt.year, dt.month)
+
+    m = _YEAR_MONTH_NUM.match(text)
+    if m:
+        return _month_bounds(dt.year, dt.month)
+
+    m = _YEAR_ONLY.match(text)
+    if m:
+        return _year_bounds(dt.year)
+
+    m = _QUARTER.match(text)
+    if m:
+        return _quarter_bounds(int(m.group(1)), int(m.group(2)))
 
     # default: treat as a specific day
     return _day_bounds(dt)
@@ -127,8 +126,8 @@ def w_timestamp(prompt: str,
 
 _RANGE_CONNECTOR = re.compile(r"\b(from|between)\b|\b(to|and|through|thru|until|till)\b|[-–—~]", re.I)
 
-_YEAR_ONLY = re.compile(r"^\s*(\d{4})\s*$")
-_YEAR_MONTH_NUM = re.compile(r"^\s*(\d{4})[-/](\d{1,2})\s*$")
+_YEAR_ONLY = re.compile(r"^(.*\s+)*(\d{4})(\s+.*)*$")
+_YEAR_MONTH_NUM = re.compile(r"^(.*\s+)*(\d{4})[-/](\d{1,2})(\s+.*)*$")
 _QUARTER = re.compile(r"^\s*Q([1-4])\s*(\d{4})\s*$", re.I)
 
 _REGEX_MONTH = r"\b(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|jul(y)?|aug(ust)?|"\
