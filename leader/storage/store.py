@@ -170,3 +170,46 @@ def fetch_photos_by_metadata(conn, metadata, silo_ids, limit=1000,
             "tags": tags,
         })
     return results
+
+
+def fetch_photos_by_bounding_box(conn, min_lat, max_lat, min_lon, max_lon, table=DB_LEADER_TABLE_NAME):
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT photo_id, lat, lon
+        FROM {table}
+        WHERE lat >= {min_lat} AND lat <= {max_lat}
+            AND lon >= {min_lon} AND lon <= {max_lon};
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    return rows
+
+
+def fetch_photos_by_time_range(conn, t_start, t_end, table=DB_LEADER_TABLE_NAME):
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT photo_id, ts
+        FROM {table}
+        WHERE ts BETWEEN %s AND %s;
+    """, (t_start, t_end))
+    rows = cur.fetchall()
+    cur.close()
+    return rows
+
+
+def query_meta_availability(conn, table=DB_LEADER_TABLE_NAME) -> (float, float):
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT COUNT(*) AS cnt
+        FROM {table}
+        WHERE lat IS NOT NULL AND lon IS NOT NULL;
+    """)
+    num_loc = cur.fetchone()[0]
+    cur.execute(f"""
+        SELECT COUNT(*) AS cnt
+        FROM {table}
+        WHERE ts IS NOT NULL;
+    """)
+    num_time = cur.fetchone()[0]
+    num_photos = query_photo_num(conn)[0]
+    return num_loc / num_photos, num_time / num_photos

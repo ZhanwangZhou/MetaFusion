@@ -4,6 +4,7 @@ import time
 
 import typer
 from leader.leader import Leader
+from leader.leader_adaptive import LeaderAdaptive
 from follower.follower import Follower
 
 app = typer.Typer(help='MetaFusion distributed photo system CLI')
@@ -20,21 +21,21 @@ def leader(
         device: str = typer.Option('cpu',
                                    help='Follower image embedding model device'),
         normalize: bool = typer.Option(True,
-                                       help='Follower image embedding normalization')
+                                       help='Follower image embedding normalization'),
+        adaptive: bool = typer.Option(False,
+                                      help='Adaptive metadata-vector fusion')
 ):
     """Start the leader node."""
-    leader_node = Leader(host, port, base_dir, model_name, device, normalize)
-
-    # If the Leader doesn't include an extractor, you can create one here in main:
-
+    if adaptive:
+        leader_node = LeaderAdaptive(host, port, base_dir, model_name, device, normalize)
+    else:
+        leader_node = Leader(host, port, base_dir, model_name, device, normalize)
     while True:
         print('Enter command')
         try:
             line = input("> ").strip()
             if not line:
                 continue
-
-            # split into command + remaining args
             parts = line.split(maxsplit=1)
             cmd = parts[0]
             arg = parts[1] if len(parts) > 1 else ""
@@ -55,6 +56,14 @@ def leader(
                     leader_node.mass_upload(arg)
                 case 'upload_from_msgpack':
                     leader_node.upload_from_msgpack(arg)
+                case 'upload_from_sqlite':
+                    if not arg:
+                        leader_node.upload_from_sqlite()
+                    else:
+                        args = arg.split()
+                        if len(args) != 2:
+                            print('Usage: upload_from_sqlite <db path> <photo table name>')
+                        leader_node.upload_from_sqlite(db_path=args[0], photo_table=args[1])
                 case 'clear':
                     leader_node.clear()
                 case 'search':
