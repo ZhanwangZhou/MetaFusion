@@ -175,14 +175,14 @@ class Leader:
 
             for row in rows:
                 photoid, ext, lat, lon, datetaken, saved_path = row
-                if datetaken:
+                if datetaken and datetaken != 'null':
                     timestamp = datetime.strptime(datetaken, "%Y-%m-%d %H:%M:%S.%f")
                 else:
                     timestamp = None
                 metadata = {
                     'photo_id': photoid,
                     'photo_name': str(photoid),
-                    'timestamp': timestamp.strftime('%Y:%m:%d %H:%M:%S'),
+                    'timestamp': timestamp and timestamp.strftime('%Y:%m:%d %H:%M:%S'),
                     'latitude': lat,
                     'longitude': lon,
                     'camera_make': None,
@@ -390,12 +390,16 @@ class Leader:
         request_id = message_dict['request_id']
         silo_id = message_dict['silo_id']
         photo_id = message_dict['photo_id']
+        validity = message_dict['validity']
         pending_uploads = self.pending_client_request[request_id]['pending_uploads']
         if photo_id and photo_id in pending_uploads:
             metadata = pending_uploads.pop(photo_id)
-            insert_new_photo(self.conn, silo_id, metadata)
-            LOGGER.debug(f'Inserted photo {metadata["photo_name"]} into metadata database.'
-                         f'Assigned to follower {silo_id}')
+            if validity:
+                insert_new_photo(self.conn, silo_id, metadata)
+                LOGGER.debug(f'Inserted photo {metadata["photo_name"]} into metadata database.'
+                             f'Assigned to follower {silo_id}')
+            else:
+                LOGGER.info(f'Skipped invalid photo {metadata["photo_name"]}.')
         if len(pending_uploads) == 0:
             self.pending_client_request.pop(request_id)
 

@@ -220,23 +220,27 @@ class Follower:
         photo_format = message_dict['photo_format']
         saved_path = message_dict['saved_path']
         vector = self.model.encode(saved_path)
-        vector_id = self.faiss_index.add(vector)
-        self.faiss_index.save()
-        insert_data = {
-            'vector_id': vector_id,
-            'photo_id': photo_id,
-            'photo_name': str(photo_id),
-            'photo_format': photo_format,
-            'saved_path': saved_path,
-        }
-        insert_new_photo_vector(self.conn, insert_data, table=self.psql_table_name)
-        LOGGER.info('Added uploaded image %d.%s to local vector index as vector_id=%d',
-                    photo_id, photo_format, vector_id, )
+        if vector is not None:
+            vector_id = self.faiss_index.add(vector)
+            self.faiss_index.save()
+            insert_data = {
+                'vector_id': vector_id,
+                'photo_id': photo_id,
+                'photo_name': str(photo_id),
+                'photo_format': photo_format,
+                'saved_path': saved_path,
+            }
+            insert_new_photo_vector(self.conn, insert_data, table=self.psql_table_name)
+            LOGGER.info('Added uploaded image %d.%s to local vector index as vector_id=%d',
+                        photo_id, photo_format, vector_id, )
+        else:
+            LOGGER.info('Skip invalid image %d.%s', photo_id, photo_format)
         message = {
             'message_type': 'upload_from_sqlite_reply',
             'request_id': request_id,
             'silo_id': self.silo_id,
-            'photo_id': photo_id
+            'photo_id': photo_id,
+            'validity': vector is not None
         }
         tcp_client(self.leader_host, self.leader_port, message)
 
