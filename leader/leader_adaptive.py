@@ -43,7 +43,8 @@ class LeaderAdaptive(Leader):
                 loc.min_lat - delta_lat,
                 loc.max_lat + delta_lat,
                 loc.min_lon - delta_lon,
-                loc.max_lon + delta_lon
+                loc.max_lon + delta_lon,
+                table=self.photo_table_name
             )
             for photo_id, lat, lon in rows:
                 distance_km = distance_point_to_bbox_km(lat, lon, loc.min_lat, loc.max_lat, loc.min_lon, loc.max_lon)
@@ -57,7 +58,8 @@ class LeaderAdaptive(Leader):
         delta_days = max_query_time_difference(lambda_days=lambda_days)
         rows = fetch_photos_by_time_range(self.conn,
                                           t_start - timedelta(days=delta_days),
-                                          t_end + timedelta(days=delta_days))
+                                          t_end + timedelta(days=delta_days),
+                                          table=self.photo_table_name)
         for photo_id, ts in rows:
             sim_t = time_similarity(ts, t_start, t_end, lambda_days)
             sim_score = sim_t * w_time_nml
@@ -112,7 +114,7 @@ class LeaderAdaptive(Leader):
             return
 
         # Compute metadata and vector score weight
-        a_loc, a_time = query_meta_availability(self.conn)
+        a_loc, a_time = query_meta_availability(self.conn, table=self.photo_table_name)
         w_loc = request['w_loc']
         w_time = request['w_time']
         availability = a_loc * w_loc + a_time * w_time
@@ -135,7 +137,10 @@ class LeaderAdaptive(Leader):
         print('w_m:', w_m, '\tw_v:', w_v)
         print(f'{"=" * 60}')
         for photo_id in sorted_photo_ids:
-            if final_scores[photo_id] < 0.5:
+            if final_scores[photo_id] < 0.8 * availability:
                 break
-            print(photo_id, final_scores[photo_id])
+            print(photo_id, final_scores[photo_id], '\t',
+                  request['vector_sim_scores'].get(photo_id, 0),
+                  '\t',
+                  request['metadata_sim_scores'].get(photo_id, 0))
         print(f'{"=" * 60}\n')

@@ -45,6 +45,15 @@ def leader(
                     leader_node.list_member()
                 case 'ls_num_photo':
                     leader_node.list_num_photo()
+                case 'set_missing_rate':
+                    try:
+                        arg = float(arg)
+                    except ValueError:
+                        print('Usage: set_missing_rate <missing rate>')
+                        continue
+                    leader_node.set_metadata_missing_rate(arg)
+                case 'reset_full_metadata':
+                    leader_node.reset_full_metadata()
                 case 'upload':
                     if not arg:
                         print('Usage: upload <image path>')
@@ -63,6 +72,7 @@ def leader(
                         args = arg.split()
                         if len(args) != 2:
                             print('Usage: upload_from_sqlite <db path> <photo table name>')
+                            continue
                         leader_node.upload_from_sqlite(db_path=args[0], photo_table=args[1])
                 case 'clear':
                     leader_node.clear()

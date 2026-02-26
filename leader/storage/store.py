@@ -71,7 +71,7 @@ def insert_new_photo(conn, silo_id, metadata, table=DB_LEADER_TABLE_NAME):
     cur.close()
 
 
-def clear_all_photos(conn, table='photos_meta'):
+def clear_all_photos(conn, table=DB_LEADER_TABLE_NAME):
     cur = conn.cursor()
     cur.execute(f'DELETE FROM {table}')
     cur.close()
@@ -213,3 +213,43 @@ def query_meta_availability(conn, table=DB_LEADER_TABLE_NAME) -> (float, float):
     num_time = cur.fetchone()[0]
     num_photos = query_photo_num(conn)[0]
     return num_loc / num_photos, num_time / num_photos
+
+
+def create_mask_view(conn, p: float, view_name):
+    assert 0.0 <= p <= 1.0, "p must be in [0,1]"
+    cur = conn.cursor()
+    base = 1000
+    threshold = int(p * base)
+
+    cur.execute(f"""
+        CREATE TEMP VIEW {view_name} AS
+        SELECT
+            photo_id,
+            CASE
+                WHEN abs(hashtext(photo_id || '_ts')) % {base} < {threshold}
+                THEN NULL
+                ELSE ts
+            END AS ts,
+
+            CASE
+                WHEN abs(hashtext(photo_id || '_geo')) % {base} < {threshold}
+                THEN NULL
+                ELSE lat
+            END AS lat,
+
+            CASE
+                WHEN abs(hashtext(photo_id || '_geo')) % {base} < {threshold}
+                THEN NULL
+                ELSE lon
+            END AS lon
+        FROM {DB_LEADER_TABLE_NAME};
+    """)
+    conn.commit()
+    cur.close()
+
+
+def drop_mask_view(conn, view_name):
+    cur = conn.cursor()
+    cur.execute(f"DROP VIEW IF EXISTS {view_name};")
+    conn.commit()
+    cur.close()

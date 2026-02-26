@@ -27,6 +27,7 @@ class Leader:
         self.model = ImageEmbeddingModel(model_name=model_name,
                                          device=device,
                                          normalize=normalize)
+        self.photo_table_name = DB_LEADER_TABLE_NAME
 
         # Unified follower index/model parameters
         self.base_dir = base_dir
@@ -57,6 +58,14 @@ class Leader:
     def list_num_photo(self):
         num = query_photo_num(self.conn)[0]
         print(f'Num of photos stored: {num}')
+
+    def set_metadata_missing_rate(self, p: float):
+        self.photo_table_name = 'photos_masked'
+        create_mask_view(self.conn, p, self.photo_table_name)
+
+    def reset_full_metadata(self):
+        drop_mask_view(self.conn, self.photo_table_name)
+        self.photo_table_name = DB_LEADER_TABLE_NAME
 
     def upload(self, image_path):
         if len(self.followers) == 0:
@@ -222,13 +231,13 @@ class Leader:
             cand_photo_ids = set()
         else:
             # Common pre-filtering for metadata_only and meta_fusion
-            cand_silos = prefilter_candidate_silos(self.conn, metadata)
+            cand_silos = prefilter_candidate_silos(self.conn, metadata, table=self.photo_table_name)
             LOGGER.info("Candidate silos (silo_id, count): %s", cand_silos)
             if not cand_silos:
                 print("No candidate silos from metadata; skip vector search.")
                 return
             silo_ids = {s for (s, _) in cand_silos}
-            cand_photos = fetch_photos_by_metadata(self.conn, metadata, list(silo_ids))
+            cand_photos = fetch_photos_by_metadata(self.conn, metadata, list(silo_ids), table=self.photo_table_name)
             cand_photo_ids = {p['photo_id'] for p in cand_photos}
             # Immediately return results if metadata only search
             if search_mode == 'metadata_only':
