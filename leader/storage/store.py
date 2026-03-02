@@ -108,9 +108,9 @@ def prefilter_candidate_silos(conn, metadata, limit=None, table=DB_LEADER_TABLE_
     sql = f"""
         SELECT silo_id, COUNT(*) AS cnt
         FROM {table}
-        WHERE (ts IS NULL OR ts >= %(start_ts)s AND ts <= %(end_ts)s)
-            AND (lat IS NULL OR lat >= %(min_lat)s AND lat <= %(max_lat)s)
-            AND (lon IS NULL OR lon >= %(min_lon)s AND lon <= %(max_lon)s)
+        WHERE ts >= %(start_ts)s AND ts <= %(end_ts)s
+            AND lat >= %(min_lat)s AND lat <= %(max_lat)s
+            AND lon >= %(min_lon)s AND lon <= %(max_lon)s
         GROUP BY silo_id
         ORDER BY cnt DESC
     """
@@ -140,9 +140,9 @@ def fetch_photos_by_metadata(conn, metadata, silo_ids, limit=1000,
     sql = f"""
         SELECT photo_id, silo_id, photo_name, ts, lat, lon, cam_make, cam_model, tags
         FROM {table}
-        WHERE (ts IS NULL OR ts >= %(start_ts)s AND ts <= %(end_ts)s)
-            AND (lat IS NULL OR lat >= %(min_lat)s AND lat <= %(max_lat)s)
-            AND (lon IS NULL OR lon >= %(min_lon)s AND lon <= %(max_lon)s)
+        WHERE ts >= %(start_ts)s AND ts <= %(end_ts)s
+            AND lat >= %(min_lat)s AND lat <= %(max_lat)s
+            AND lon >= %(min_lon)s AND lon <= %(max_lon)s
             AND silo_id = ANY(%(silo_ids)s)
         ORDER BY ts DESC
         LIMIT %(limit)s
@@ -221,10 +221,11 @@ def create_mask_view(conn, p: float, view_name):
     base = 1000
     threshold = int(p * base)
 
+    cur.execute(f"DROP VIEW IF EXISTS {view_name};")
     cur.execute(f"""
         CREATE TEMP VIEW {view_name} AS
         SELECT
-            photo_id,
+            photo_id, silo_id, photo_name,
             CASE
                 WHEN abs(hashtext(photo_id || '_ts')) % {base} < {threshold}
                 THEN NULL
@@ -241,7 +242,8 @@ def create_mask_view(conn, p: float, view_name):
                 WHEN abs(hashtext(photo_id || '_geo')) % {base} < {threshold}
                 THEN NULL
                 ELSE lon
-            END AS lon
+            END AS lon,
+            cam_make, cam_model, tags, extra
         FROM {DB_LEADER_TABLE_NAME};
     """)
     conn.commit()

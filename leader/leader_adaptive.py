@@ -14,7 +14,7 @@ class LeaderAdaptive(Leader):
     def __init__(self, host, port, base_dir, model_name, device, normalize):
         super().__init__(host, port, base_dir, model_name, device, normalize)
 
-    def search(self, prompt, output_path=None, search_mode='meta_fusion'):
+    def search(self, prompt, output_path=None, search_mode='meta_fusion', print_result=True):
         if len(self.followers) == 0:
             print("No follower nodes available.")
             return
@@ -36,7 +36,7 @@ class LeaderAdaptive(Leader):
         # Fetch photos by location and compute location similarity
         sim_scores = {}
         for loc in locs:
-            lambda_km = 0.5 * bbox_radius_km(loc.min_lat, loc.max_lat, loc.min_lon, loc.max_lon)
+            lambda_km = 0.25 * bbox_radius_km(loc.min_lat, loc.max_lat, loc.min_lon, loc.max_lon)
             delta_lat, delta_lon = max_query_distance(lambda_km=lambda_km, ref_lat=loc.lat)
             rows = fetch_photos_by_bounding_box(
                 self.conn,
@@ -54,7 +54,7 @@ class LeaderAdaptive(Leader):
                     sim_scores[photo_id] = sim_score
 
         # Fetch photos by time range and compute time similarity
-        lambda_days = 0.5 * round((t_end - t_start).total_seconds() / 86400, 3)
+        lambda_days = 0.25 * round((t_end - t_start).total_seconds() / 86400, 3)
         delta_days = max_query_time_difference(lambda_days=lambda_days)
         rows = fetch_photos_by_time_range(self.conn,
                                           t_start - timedelta(days=delta_days),
@@ -137,7 +137,7 @@ class LeaderAdaptive(Leader):
         print('w_m:', w_m, '\tw_v:', w_v)
         print(f'{"=" * 60}')
         for photo_id in sorted_photo_ids:
-            if final_scores[photo_id] < 0.8 * availability:
+            if final_scores[photo_id] < vector_conf * availability * 2:
                 break
             print(photo_id, final_scores[photo_id], '\t',
                   request['vector_sim_scores'].get(photo_id, 0),

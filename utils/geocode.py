@@ -42,7 +42,7 @@ def geocode_location(name: str) -> Tuple[Optional[float], Optional[float], Tuple
     return float(loc.latitude), float(loc.longitude), bbox
 
 
-def geocode_bbox(name: str, radius_km: float = 50.0) -> Optional[Tuple[float, float, float, float]]:
+def geocode_bbox(name: str, radius_km: float = 50.0) -> Optional[Tuple[float, ...]]:
     """
         Convert a place name into an approximate latitude/longitude bounding box,
         suitable for SQL lat/lon range filtering.
@@ -54,9 +54,11 @@ def geocode_bbox(name: str, radius_km: float = 50.0) -> Optional[Tuple[float, fl
         Returns:
             (min_lat, max_lat, min_lon, max_lon) or None
     """
-    lat, lon, _ = geocode_location(name)
+    lat, lon, bbox = geocode_location(name)
     if lat is None or lon is None:
         return None
+    if bbox:
+        return bbox
 
     delta_deg = radius_km / 111.0
     min_lat = lat - delta_deg

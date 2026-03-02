@@ -52,8 +52,8 @@ def leader(
                         print('Usage: set_missing_rate <missing rate>')
                         continue
                     leader_node.set_metadata_missing_rate(arg)
-                case 'reset_full_metadata':
-                    leader_node.reset_full_metadata()
+                case 'reset_missing_rate':
+                    leader_node.reset_metadata_missing_rate()
                 case 'upload':
                     if not arg:
                         print('Usage: upload <image path>')
@@ -64,7 +64,8 @@ def leader(
                         print('Usage: upload <image directory>')
                     leader_node.mass_upload(arg)
                 case 'upload_from_msgpack':
-                    leader_node.upload_from_msgpack(arg)
+                    pass
+                    # leader_node.upload_from_msgpack(arg)
                 case 'upload_from_sqlite':
                     if not arg:
                         leader_node.upload_from_sqlite()
@@ -85,7 +86,8 @@ def leader(
                     if not arg:
                         print("Usage: mass_search <prompt file>")
                         continue
-                    leader_node.mass_search(arg)
+                    pass
+                    # leader_node.mass_search(arg)
                 case 'search_metadata':
                     if not arg:
                         print("Usage: search_metadata <natural language prompt>")
