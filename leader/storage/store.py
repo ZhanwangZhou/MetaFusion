@@ -255,3 +255,42 @@ def drop_mask_view(conn, view_name):
     cur.execute(f"DROP VIEW IF EXISTS {view_name};")
     conn.commit()
     cur.close()
+
+
+def create_search_results_table(conn):
+    cur = conn.cursor()
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS search_results (
+            query_id INTEGER,
+            recall_k REAL,
+            ap REAL,
+            search_mode TEXT,
+            missing_rate REAL,
+            PRIMARY KEY (query_id, search_mode, missing_rate)
+        );
+    """)
+    conn.commit()
+    cur.close()
+
+
+def query_search_results(conn, search_mode, missing_rate):
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT query_id, recall_k, ap
+        FROM search_results
+        WHERE search_mode = %s AND missing_rate = %s
+        ORDER BY query_id ASC;
+    """, (search_mode, missing_rate))
+    rows = cur.fetchall()
+    cur.close()
+    return rows
+
+
+def insert_search_result(conn, query_id, recall_k, ap, search_mode, missing_rate):
+    cur = conn.cursor()
+    cur.execute(f"""
+        INSERT INTO search_results
+        (query_id, recall_k, ap, search_mode, missing_rate)
+        VALUES (%s, %s, %s, %s, %s);
+    """, (query_id, recall_k, ap, search_mode, missing_rate))
+    cur.close()

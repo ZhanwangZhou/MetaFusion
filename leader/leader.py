@@ -1,17 +1,16 @@
 import sys
 import time
-import random
+import ast
 import threading
 import base64
-import msgpack
 import sqlite3
-from datetime import timedelta
 from typing import List, Dict, Optional, Any
 from leader.storage.store import *
 from utils.config import *
 from utils.image_utils import *
 from utils.prompt_metadata import extract_prompt_meta
 from utils.photo_to_vector import ImageEmbeddingModel
+from utils.eval_utils import *
 from utils.network import tcp_server, tcp_client, udp_server
 
 
@@ -158,7 +157,7 @@ class Leader:
                            self.followers[index]['port'],
                            message)
 
-    def search(self, prompt, output_path=None, search_mode='meta_fusion', print_result=True):
+    def search(self, prompt, output_path=None, search_mode='meta_fusion', print_result=True, gt=None):
         """
         Search/Get photos using given prompt under following modes:
         - 'metadata_only': Search by only metadata psql.
@@ -167,7 +166,7 @@ class Leader:
         """
         if len(self.followers) == 0:
             print("No follower nodes available.")
-            return
+            return None
         metadata = extract_prompt_meta(prompt)
         LOGGER.info('Extracted prompt meta data: %s', metadata)
 
@@ -183,10 +182,12 @@ class Leader:
             # Immediately return results if metadata only search
             if search_mode == 'metadata_only':
                 cand_photo_names = [p['photo_name'] for p in cand_photos]
-                self._eval_search_result(prompt, 'metadata_only', cand_photo_names, False, print_result)
-                return
+                self._eval_search_result(prompt, 'metadata_only', cand_photo_names, False, print_result, gt)
+                return -1
             cand_silos = prefilter_candidate_silos(self.conn, metadata, table=self.photo_table_name)
             silo_ids = {s for (s, _) in cand_silos}
+        if len(cand_silos) == 0:
+            return -1
         query_vec = self.model.encode_text(prompt)
 
         # Initialize message and request info
@@ -198,7 +199,8 @@ class Leader:
             'cand_photo_ids': cand_photo_ids,
             'result': [],
             'search_mode': search_mode,
-            'print_result': print_result
+            'print_result': print_result,
+            'ground_truth': gt
         }
         message = {
             'message_type': 'search',
@@ -219,6 +221,38 @@ class Leader:
                     follower['pending_message'][request_id] = message
                 continue
             tcp_client(follower['host'], follower['port'], message)
+        return request_id
+
+    def mass_search(self, search_mode, prompt_file_path, gt_file_path):
+        self.pending_client_request['mass_search']: Dict[Any: (float, float)] = {'curr': (0.0, 0.0)}
+        search_results = self.pending_client_request['mass_search']
+        create_search_results_table(self.conn)
+        disk_results = query_search_results(self.conn, search_mode, self.metadata_missing_rate)
+        for r in disk_results:
+            query_id, recall_k, ap = r
+            search_results[query_id] = (recall_k, ap)
+
+        with open(prompt_file_path, 'r') as prompt_file, open(gt_file_path, 'r') as gt_file:
+            for i, (line1, line2) in enumerate(zip(prompt_file, gt_file)):
+                if i in search_results:
+                    continue
+                prompt = line1.strip()
+                gt = [str(e) for e in ast.literal_eval(line2.strip())]
+                request_id = self.search(prompt, search_mode=search_mode, print_result=False, gt=gt)
+                while request_id in self.pending_client_request:
+                    time.sleep(0.1)
+                # print(search_results)
+                recall_k, ap = search_results['curr']
+                search_results[i] = (recall_k, ap)
+                insert_search_result(self.conn, i, recall_k, ap, search_mode, self.metadata_missing_rate)
+
+        search_results['curr'] = (0.0, 0.0)
+        m_recall_k = sum(val[0] for val in search_results.values()) / len(search_results)
+        m_ap = sum(val[1] for val in search_results.values()) / len(search_results)
+        print('Search_Mode:', search_mode)
+        print('Missing Rate:', self.metadata_missing_rate)
+        print('Recall@k =', m_recall_k, '\t mAP=', m_ap)
+        self.pending_client_request.pop('mass_search')
 
     def clear(self):
         clear_all_photos(self.conn)
@@ -325,7 +359,7 @@ class Leader:
         if len(pending_uploads) == 0:
             self.pending_client_request.pop(request_id)
 
-    def _eval_search_result(self, prompt, search_mode, search_result, scored=True, print_result=True):
+    def _eval_search_result(self, prompt, search_mode, search_result, scored=True, print_result=True, gt=None):
         if print_result:
             print(f'\n{"=" * 60}')
             print(f'Search Mode: {search_mode}')
@@ -334,13 +368,18 @@ class Leader:
             print(f'Total Results: {len(search_result)}')
             print(f'{"=" * 60}')
             if scored:
-                for i, tp in enumerate(search_result):
-                    photo_name, score = tp
+                for i, (photo_name, score) in enumerate(search_result):
                     print(f'{i + 1}. Filename = {photo_name}, Score = {score: .4f}')
             else:
                 for i, photo_name in enumerate(search_result):
                     print(f'{i + 1}. Filename = {photo_name}')
             print(f'{"=" * 60}')
+        if gt:
+            recall_k = recall_at_k(ground_truth=gt, results=search_result, k=GLOBAL_RECALL_K)
+            ap = average_precision(ground_truth=gt, results=search_result)
+            print(f'Prompt: "{prompt}"', '\t Recall@k =', recall_k, '\tAP =', ap)
+            if 'mass_search' in self.pending_client_request:
+                self.pending_client_request['mass_search']['curr'] = (recall_k, ap)
 
     def _handle_search_result(self, message_dict, get_photo=False):
         """
@@ -368,7 +407,8 @@ class Leader:
                 r for r in results if r.get('photo_id') in request.get('cand_photo_ids')
             ]
         search_result = [(r.get('photo_name'), r.get('score')) for r in results]
-        self._eval_search_result(request['prompt'], search_mode, search_result, print_result=request['print_result'])
+        self._eval_search_result(request['prompt'], search_mode, search_result, print_result=request['print_result'],
+                                 gt=request['ground_truth'])
 
         if get_photo:
             for r in results:

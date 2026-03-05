@@ -14,7 +14,7 @@ class LeaderAdaptive(Leader):
     def __init__(self, host, port, base_dir, model_name, device, normalize):
         super().__init__(host, port, base_dir, model_name, device, normalize)
 
-    def search(self, prompt, output_path=None, search_mode='meta_fusion', print_result=True):
+    def search(self, prompt, output_path=None, search_mode='adaptive_fusion', print_result=True, gt=None):
         if len(self.followers) == 0:
             print("No follower nodes available.")
             return
@@ -77,6 +77,8 @@ class LeaderAdaptive(Leader):
             'w_time': w_time_nml,
             'metadata_sim_scores': sim_scores,
             'vector_sim_scores': {},
+            'print_result': print_result,
+            'ground_truth': gt
         }
         message = {
             'message_type': 'search',
@@ -91,6 +93,7 @@ class LeaderAdaptive(Leader):
                     follower['pending_message'][request_id] = message
                 continue
             tcp_client(follower['host'], follower['port'], message)
+        return request_id
 
     def _handle_search_result(self, message_dict, get_photo=False):
         silo_id = message_dict.get('silo_id')
@@ -128,19 +131,24 @@ class LeaderAdaptive(Leader):
             if key not in final_scores:
                 final_scores[key] = 0
             final_scores[key] += val * w_v
-        self.pending_client_request.pop(request_id)
 
         sorted_photo_ids = sorted(final_scores.keys(), key=lambda x: final_scores[x], reverse=True)
-        print(f'\n{"=" * 60}')
-        print(f'Prompt: "{request["prompt"]}"')
-        print(f'{"=" * 60}')
-        print('w_m:', w_m, '\tw_v:', w_v)
-        print(f'{"=" * 60}')
-        for photo_id in sorted_photo_ids:
-            if final_scores[photo_id] < vector_conf * availability * 2:
-                break
-            print(photo_id, final_scores[photo_id], '\t',
-                  request['vector_sim_scores'].get(photo_id, 0),
-                  '\t',
-                  request['metadata_sim_scores'].get(photo_id, 0))
-        print(f'{"=" * 60}\n')
+        search_result = sorted(final_scores.items(), key=lambda x: x[1], reverse=True)
+        self._eval_search_result(request['prompt'], 'adaptive_fusion', search_result,
+                                 print_result=False, gt=request['ground_truth'])
+        if request['print_result']:
+            print(f'\n{"=" * 60}')
+            print(f'Prompt: "{request["prompt"]}"')
+            print(f'{"=" * 60}')
+            print('w_m:', w_m, '\tw_v:', w_v)
+            print(f'{"=" * 60}')
+            for photo_id in sorted_photo_ids:
+                if final_scores[photo_id] < vector_conf * availability * 2:
+                    break
+                print(photo_id, final_scores[photo_id], '\t',
+                      request['vector_sim_scores'].get(photo_id, 0),
+                      '\t',
+                      request['metadata_sim_scores'].get(photo_id, 0))
+            print(f'{"=" * 60}\n')
+
+        self.pending_client_request.pop(request_id)
