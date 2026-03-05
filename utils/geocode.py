@@ -31,7 +31,7 @@ def geocode_location(name: str) -> Tuple[Optional[float], Optional[float], Tuple
         return None, None, (None,)
 
     geolocator = _get_geolocator()
-    loc = geolocator.geocode(name, addressdetails=True)
+    loc = geolocator.geocode(name, addressdetails=True, timeout=5)
     if not loc:
         return None, None, (None,)
     raw_data = loc.raw

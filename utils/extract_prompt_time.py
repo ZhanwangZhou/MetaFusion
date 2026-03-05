@@ -31,7 +31,7 @@ def extract_time_range(prompt: str, now: Optional[datetime] = None) -> Tuple[Opt
     # If nothing found, fallback to parsing whole prompt as one date
     if not matches:
         dt = _parse_dt(prompt.strip(), now)
-        return (None, None) if not dt else _day_bounds(dt.replace(tzinfo=None))
+        return (datetime(1900, 1, 1), datetime(2100, 1, 1)) if not dt else _day_bounds(dt.replace(tzinfo=None))
 
     # 2) If we found >=2, attempt explicit range detection using nearby connectors
     # We'll look at the first two *distinct* date texts and see if prompt contains a connector between them.
