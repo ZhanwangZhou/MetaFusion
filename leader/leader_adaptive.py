@@ -32,6 +32,8 @@ class LeaderAdaptive(Leader):
         t_end = t_end.replace(tzinfo=timezone.utc)
         w_loc_nml = w_loc / (w_loc + w_time)
         w_time_nml = w_time / (w_loc + w_time)
+        if search_mode == 'fixed_fusion':
+            w_loc_nml, w_time_nml = 0.5, 0.5
 
         # Fetch photos by location and compute location similarity
         sim_scores = {}
@@ -50,6 +52,8 @@ class LeaderAdaptive(Leader):
                 distance_km = distance_point_to_bbox_km(lat, lon, loc.min_lat, loc.max_lat, loc.min_lon, loc.max_lon)
                 sim_l = location_similarity(distance_km, lambda_km)
                 sim_score = sim_l * loc.score / w_loc * w_loc_nml
+                if search_mode == 'fixed_fusion':
+                    sim_score = sim_l * w_loc_nml
                 if photo_id not in sim_scores or sim_scores[photo_id] < sim_score:
                     sim_scores[photo_id] = sim_score
 
@@ -77,6 +81,7 @@ class LeaderAdaptive(Leader):
             'w_time': w_time_nml,
             'metadata_sim_scores': sim_scores,
             'vector_sim_scores': {},
+            'search_mode': search_mode,
             'print_result': print_result,
             'ground_truth': gt
         }
@@ -115,6 +120,8 @@ class LeaderAdaptive(Leader):
             request['vector_sim_scores'][result['photo_id']] = sim_score
         if len(request['recipients']) > 0:
             return
+        prompt = request['prompt']
+        search_mode = request['search_mode']
 
         # Compute metadata and vector score weight
         a_loc, a_time = query_meta_availability(self.conn, table=self.photo_table_name)
@@ -124,6 +131,8 @@ class LeaderAdaptive(Leader):
         vec_sim_sorted = sorted(request['vector_sim_scores'].values(), reverse=True)
         vector_conf = vector_confidence(vec_sim_sorted[0], vec_sim_sorted[min(100, len(vec_sim_sorted) - 1)])
         w_m, w_v = metadata_and_vector_weight(A=availability, R_v=vector_conf)
+        if search_mode == 'fixed_fusion':
+            w_m, w_v = 0.5, 0.5
 
         # Compute final scores by combining metadata and vector similarity scores
         final_scores = {key: val * w_m for key, val in request['metadata_sim_scores'].items()}
@@ -134,11 +143,10 @@ class LeaderAdaptive(Leader):
 
         sorted_photo_ids = sorted(final_scores.keys(), key=lambda x: final_scores[x], reverse=True)
         search_result = sorted(final_scores.items(), key=lambda x: x[1], reverse=True)
-        self._eval_search_result(request['prompt'], 'adaptive_fusion', search_result,
-                                 print_result=False, gt=request['ground_truth'])
+        self._eval_search_result(prompt, search_mode, search_result, print_result=False, gt=request['ground_truth'])
         if request['print_result']:
             print(f'\n{"=" * 60}')
-            print(f'Prompt: "{request["prompt"]}"')
+            print(f'Prompt: "{prompt}"')
             print(f'{"=" * 60}')
             print('w_m:', w_m, '\tw_v:', w_v)
             print(f'{"=" * 60}')
