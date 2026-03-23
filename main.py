@@ -4,6 +4,7 @@ import time
 
 import typer
 from leader.leader import Leader
+from leader.leader_adaptive import LeaderAdaptive
 from follower.follower import Follower
 
 app = typer.Typer(help='MetaFusion distributed photo system CLI')
@@ -20,21 +21,21 @@ def leader(
         device: str = typer.Option('cpu',
                                    help='Follower image embedding model device'),
         normalize: bool = typer.Option(True,
-                                       help='Follower image embedding normalization')
+                                       help='Follower image embedding normalization'),
+        adaptive: bool = typer.Option(False,
+                                      help='Adaptive metadata-vector fusion')
 ):
     """Start the leader node."""
-    leader_node = Leader(host, port, base_dir, model_name, device, normalize)
-
-    # If the Leader doesn't include an extractor, you can create one here in main:
-
+    if adaptive:
+        leader_node = LeaderAdaptive(host, port, base_dir, model_name, device, normalize)
+    else:
+        leader_node = Leader(host, port, base_dir, model_name, device, normalize)
     while True:
         print('Enter command')
         try:
             line = input("> ").strip()
             if not line:
                 continue
-
-            # split into command + remaining args
             parts = line.split(maxsplit=1)
             cmd = parts[0]
             arg = parts[1] if len(parts) > 1 else ""
@@ -44,6 +45,15 @@ def leader(
                     leader_node.list_member()
                 case 'ls_num_photo':
                     leader_node.list_num_photo()
+                case 'set_missing_rate':
+                    try:
+                        arg = float(arg)
+                    except ValueError:
+                        print('Usage: set_missing_rate <missing rate>')
+                        continue
+                    leader_node.set_metadata_missing_rate(arg)
+                case 'reset_missing_rate':
+                    leader_node.reset_metadata_missing_rate()
                 case 'upload':
                     if not arg:
                         print('Usage: upload <image path>')
@@ -54,7 +64,17 @@ def leader(
                         print('Usage: upload <image directory>')
                     leader_node.mass_upload(arg)
                 case 'upload_from_msgpack':
-                    leader_node.upload_from_msgpack(arg)
+                    pass
+                    # leader_node.upload_from_msgpack(arg)
+                case 'upload_from_sqlite':
+                    if not arg:
+                        leader_node.upload_from_sqlite()
+                    else:
+                        args = arg.split()
+                        if len(args) != 2:
+                            print('Usage: upload_from_sqlite <db path> <photo table name>')
+                            continue
+                        leader_node.upload_from_sqlite(db_path=args[0], photo_table=args[1])
                 case 'clear':
                     leader_node.clear()
                 case 'search':
@@ -63,10 +83,12 @@ def leader(
                         continue
                     leader_node.search(arg, search_mode='meta_fusion')
                 case 'mass_search':
-                    if not arg:
-                        print("Usage: mass_search <prompt file>")
-                        continue
-                    leader_node.mass_search(arg)
+                    if arg:
+                        args = arg.split()
+                        if len(args) == 3:
+                            leader_node.mass_search(search_mode=args[0], prompt_file_path=args[1], gt_file_path=args[2])
+                            continue
+                    print("Usage: mass_search <search mode> <prompt file path> <ground truth file path>")
                 case 'search_metadata':
                     if not arg:
                         print("Usage: search_metadata <natural language prompt>")

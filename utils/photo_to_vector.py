@@ -3,7 +3,7 @@ from typing import Optional
 import clip
 import numpy as np
 import torch
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 from io import BytesIO
 
 
@@ -35,21 +35,28 @@ class ImageEmbeddingModel:
         model, preprocess = clip.load(self.model_name, device=self.device)
         return model, preprocess
 
-    def encode(self, image_path: str = "", image_bytes: bytes = None) -> np.ndarray:
+    def encode(self, image_path: str = "", image_bytes: bytes = None):
         """
         Convert an image file into a single embedding vector.
 
         Returns:
             np.ndarray of shape (D,), dtype float32
         """
-        if image_path:
-            with Image.open(image_path) as image:
+        try:
+            if image_path:
+                with Image.open(image_path) as image:
+                    image.verify()
+                with Image.open(image_path) as image:
+                    image_tensor = self.preprocess(image).unsqueeze(0).to(self.device)
+            elif image_bytes:
+                image = Image.open(BytesIO(image_bytes))
+                image.verify()
+                image = image.convert("RGB")
                 image_tensor = self.preprocess(image).unsqueeze(0).to(self.device)
-        elif image_bytes:
-            image = Image.open(BytesIO(image_bytes)).convert("RGB")
-            image_tensor = self.preprocess(image).unsqueeze(0).to(self.device)
-        else:
-            raise ValueError
+            else:
+                raise ValueError
+        except (UnidentifiedImageError, OSError):
+            return None
         with torch.no_grad():
             embedding = self.model.encode_image(image_tensor)
         if self.normalize:

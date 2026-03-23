@@ -71,7 +71,7 @@ def insert_new_photo(conn, silo_id, metadata, table=DB_LEADER_TABLE_NAME):
     cur.close()
 
 
-def clear_all_photos(conn, table='photos_meta'):
+def clear_all_photos(conn, table=DB_LEADER_TABLE_NAME):
     cur = conn.cursor()
     cur.execute(f'DELETE FROM {table}')
     cur.close()
@@ -108,9 +108,9 @@ def prefilter_candidate_silos(conn, metadata, limit=None, table=DB_LEADER_TABLE_
     sql = f"""
         SELECT silo_id, COUNT(*) AS cnt
         FROM {table}
-        WHERE (ts IS NULL OR ts >= %(start_ts)s AND ts <= %(end_ts)s)
-            AND (lat IS NULL OR lat >= %(min_lat)s AND lat <= %(max_lat)s)
-            AND (lon IS NULL OR lon >= %(min_lon)s AND lon <= %(max_lon)s)
+        WHERE ts >= %(start_ts)s AND ts <= %(end_ts)s
+            AND lat >= %(min_lat)s AND lat <= %(max_lat)s
+            AND lon >= %(min_lon)s AND lon <= %(max_lon)s
         GROUP BY silo_id
         ORDER BY cnt DESC
     """
@@ -140,9 +140,9 @@ def fetch_photos_by_metadata(conn, metadata, silo_ids, limit=1000,
     sql = f"""
         SELECT photo_id, silo_id, photo_name, ts, lat, lon, cam_make, cam_model, tags
         FROM {table}
-        WHERE (ts IS NULL OR ts >= %(start_ts)s AND ts <= %(end_ts)s)
-            AND (lat IS NULL OR lat >= %(min_lat)s AND lat <= %(max_lat)s)
-            AND (lon IS NULL OR lon >= %(min_lon)s AND lon <= %(max_lon)s)
+        WHERE ts >= %(start_ts)s AND ts <= %(end_ts)s
+            AND lat >= %(min_lat)s AND lat <= %(max_lat)s
+            AND lon >= %(min_lon)s AND lon <= %(max_lon)s
             AND silo_id = ANY(%(silo_ids)s)
         ORDER BY ts DESC
         LIMIT %(limit)s
@@ -170,3 +170,127 @@ def fetch_photos_by_metadata(conn, metadata, silo_ids, limit=1000,
             "tags": tags,
         })
     return results
+
+
+def fetch_photos_by_bounding_box(conn, min_lat, max_lat, min_lon, max_lon, table=DB_LEADER_TABLE_NAME):
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT photo_id, lat, lon
+        FROM {table}
+        WHERE lat >= {min_lat} AND lat <= {max_lat}
+            AND lon >= {min_lon} AND lon <= {max_lon};
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    return rows
+
+
+def fetch_photos_by_time_range(conn, t_start, t_end, table=DB_LEADER_TABLE_NAME):
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT photo_id, ts
+        FROM {table}
+        WHERE ts BETWEEN %s AND %s;
+    """, (t_start, t_end))
+    rows = cur.fetchall()
+    cur.close()
+    return rows
+
+
+def query_meta_availability(conn, table=DB_LEADER_TABLE_NAME) -> (float, float):
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT COUNT(*) AS cnt
+        FROM {table}
+        WHERE lat IS NOT NULL AND lon IS NOT NULL;
+    """)
+    num_loc = cur.fetchone()[0]
+    cur.execute(f"""
+        SELECT COUNT(*) AS cnt
+        FROM {table}
+        WHERE ts IS NOT NULL;
+    """)
+    num_time = cur.fetchone()[0]
+    num_photos = query_photo_num(conn)[0]
+    return num_loc / num_photos, num_time / num_photos
+
+
+def create_mask_view(conn, p: float, view_name):
+    assert 0.0 <= p <= 1.0, "p must be in [0,1]"
+    cur = conn.cursor()
+    base = 1000
+    threshold = int(p * base)
+
+    cur.execute(f"DROP VIEW IF EXISTS {view_name};")
+    cur.execute(f"""
+        CREATE TEMP VIEW {view_name} AS
+        SELECT
+            photo_id, silo_id, photo_name,
+            CASE
+                WHEN abs(hashtext(photo_id || '_ts')) % {base} < {threshold}
+                THEN NULL
+                ELSE ts
+            END AS ts,
+
+            CASE
+                WHEN abs(hashtext(photo_id || '_geo')) % {base} < {threshold}
+                THEN NULL
+                ELSE lat
+            END AS lat,
+
+            CASE
+                WHEN abs(hashtext(photo_id || '_geo')) % {base} < {threshold}
+                THEN NULL
+                ELSE lon
+            END AS lon,
+            cam_make, cam_model, tags, extra
+        FROM {DB_LEADER_TABLE_NAME};
+    """)
+    conn.commit()
+    cur.close()
+
+
+def drop_mask_view(conn, view_name):
+    cur = conn.cursor()
+    cur.execute(f"DROP VIEW IF EXISTS {view_name};")
+    conn.commit()
+    cur.close()
+
+
+def create_search_results_table(conn):
+    cur = conn.cursor()
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS search_results (
+            query_id INTEGER,
+            recall_k REAL,
+            ap REAL,
+            search_mode TEXT,
+            missing_rate REAL,
+            PRIMARY KEY (query_id, search_mode, missing_rate)
+        );
+    """)
+    conn.commit()
+    cur.close()
+
+
+def query_search_results(conn, search_mode, missing_rate):
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT query_id, recall_k, ap
+        FROM search_results
+        WHERE search_mode = %s AND missing_rate = %s
+        ORDER BY query_id ASC;
+    """, (search_mode, missing_rate))
+    rows = cur.fetchall()
+    cur.close()
+    return rows
+
+
+def insert_search_result(conn, query_id, recall_k, ap, search_mode, missing_rate):
+    cur = conn.cursor()
+    cur.execute(f"""
+        INSERT INTO search_results
+        (query_id, recall_k, ap, search_mode, missing_rate)
+        VALUES (%s, %s, %s, %s, %s);
+    """, (query_id, recall_k, ap, search_mode, missing_rate))
+    cur.close()
